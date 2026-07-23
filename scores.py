@@ -8,9 +8,31 @@ matplotlib -- so the only changes needed are modern scipy import paths:
   - explicit `import scipy.stats` / `import scipy.ndimage` (the original
     relied on these being transitively importable via `import scipy.signal`,
     which current scipy no longer guarantees)
+  - `calculate_sac`'s final `nan_to_num` now fills +-inf with 0 instead of
+    numpy's default +-1.8e308: a bin's correlation is only ever ill-defined
+    (0/0 or x/0) where local overlap variance is ~0, and "no information"
+    (0) is the right value there, not a near-float-max number that
+    `scipy.ndimage.rotate` would then spline-interpolate into NaN over a
+    much wider area than the single offending bin. This surfaced while
+    scoring field-shuffled ratemaps below (large flat backgrounds make
+    near-zero-variance edge bins common) but is a latent correctness issue
+    for any sparse/patchy ratemap, not just shuffled ones.
 Otherwise this is a 1:1 port; it operates on plain numpy arrays throughout,
 so it works unchanged on ratemaps computed from PyTorch activations (just
 call `.detach().cpu().numpy()` first).
+
+`field_labels`/`shuffle_fields`/`GridScorer.shuffled_gridness_threshold`
+below are NOT part of the original port -- google-deepmind/grid-cells never
+released this code. They reimplement the paper's own significance test
+(Banino et al. 2018 Supplementary Methods 3d): per unit, watershed-segment
+its ratemap into firing fields, relocate each field's peak to a random bin
+100 times, and take the 95th percentile of the resulting gridness
+distribution as that unit's own threshold -- instead of one fixed cutoff
+(e.g. 0.37) applied uniformly to every unit. The watershed step here uses a
+steepest-ascent walk (every bin flows to the local peak reached by always
+stepping to the highest neighbour) rather than `scipy.ndimage.watershed_ift`
+or skimage's `watershed`, to avoid adding a dependency -- it produces the
+same drainage-basin partition.
 """
 
 import math
@@ -32,6 +54,102 @@ def circle_mask(size, radius, in_val=1.0, out_val=0.0):
     z = np.sqrt(x ** 2 + y ** 2)
     z = np.less_equal(z, radius)
     return np.where(z, in_val, out_val)
+
+
+def _steepest_ascent_basins(filled):
+    """Partitions a 2D array into drainage basins, one per local maximum.
+
+    Every bin is assigned the label of the local peak reached by repeatedly
+    stepping to the highest of its 8 neighbours (ties broken by scan order).
+    This is a dependency-free equivalent of watershed-by-flooding. Returns
+    (labels, n_basins).
+    """
+    ny, nx = filled.shape
+    label = np.full((ny, nx), -1, dtype=int)
+    next_label = 0
+    for i in range(ny):
+        for j in range(nx):
+            if label[i, j] != -1:
+                continue
+            path = []
+            ci, cj = i, j
+            while True:
+                if label[ci, cj] != -1:
+                    result = label[ci, cj]
+                    break
+                path.append((ci, cj))
+                best_i, best_j, best_val = ci, cj, filled[ci, cj]
+                for di in (-1, 0, 1):
+                    for dj in (-1, 0, 1):
+                        if di == 0 and dj == 0:
+                            continue
+                        ni, nj = ci + di, cj + dj
+                        if 0 <= ni < ny and 0 <= nj < nx and filled[ni, nj] > best_val:
+                            best_i, best_j, best_val = ni, nj, filled[ni, nj]
+                if (best_i, best_j) == (ci, cj):
+                    result = next_label
+                    next_label += 1
+                    break
+                ci, cj = best_i, best_j
+            for (pi, pj) in path:
+                label[pi, pj] = result
+    return label, next_label
+
+
+def field_labels(ratemap, min_peak_frac=0.2):
+    """Segments a ratemap into firing fields.
+
+    Each field is the drainage basin of one local peak (see
+    `_steepest_ascent_basins`), restricted to the bins at or above
+    `min_peak_frac` of that peak's height -- the standard "field = X% of
+    peak" boundary convention. Singleton (1-bin) fields are dropped as
+    noise. Returns (labels, n_fields); label 0 is background (everything
+    outside any field).
+    """
+    filled = np.nan_to_num(ratemap, nan=0.0)
+    basins, n_basins = _steepest_ascent_basins(filled)
+    labels = np.zeros_like(basins)
+    next_label = 1
+    for b in range(n_basins):
+        mask = basins == b
+        peak_val = filled[mask].max()
+        if peak_val <= 0:
+            continue
+        field_mask = mask & (filled >= min_peak_frac * peak_val)
+        if field_mask.sum() >= 2:
+            labels[field_mask] = next_label
+            next_label += 1
+    return labels, next_label - 1
+
+
+def shuffle_fields(ratemap, labels, n_fields, rng):
+    """One draw from the per-unit field-shuffle null distribution: relocate
+    every field's peak to a uniformly random bin (keeping its shape, clipped
+    at the map edges), and refill everywhere else -- including the vacated
+    original field footprints -- with the ratemap's own background
+    (non-field) mean level, so the shuffled map preserves the original's
+    overall topology/statistics outside the relocated fields. Overlapping
+    relocated fields combine via max (like overlapping firing bumps).
+    """
+    filled = np.nan_to_num(ratemap, nan=0.0)
+    ny, nx = filled.shape
+    background_mask = labels == 0
+    background_val = filled[background_mask].mean() if background_mask.any() else 0.0
+    shuffled = np.full((ny, nx), background_val, dtype=filled.dtype)
+
+    for f in range(1, n_fields + 1):
+        ys, xs = np.where(labels == f)
+        peak_idx = np.argmax(filled[ys, xs])
+        peak_y, peak_x = ys[peak_idx], xs[peak_idx]
+        rel_y, rel_x, vals = ys - peak_y, xs - peak_x, filled[ys, xs]
+
+        new_y, new_x = rng.integers(0, ny), rng.integers(0, nx)
+        ty, tx = new_y + rel_y, new_x + rel_x
+        valid = (ty >= 0) & (ty < ny) & (tx >= 0) & (tx < nx)
+        shuffled[ty[valid], tx[valid]] = np.maximum(shuffled[ty[valid], tx[valid]], vals[valid])
+
+    shuffled[np.isnan(ratemap)] = np.nan
+    return shuffled
 
 
 class GridScorer(object):
@@ -105,18 +223,28 @@ class GridScorer(object):
         n_bins = filter2(ones_seq1, ones_seq2)
         n_bins_sq = np.square(n_bins)
 
-        std_seq1 = np.power(
-            np.subtract(np.divide(sum_seq1_sq, n_bins),
-                        np.divide(np.square(sum_seq1), n_bins_sq)), 0.5)
-        std_seq2 = np.power(
-            np.subtract(np.divide(sum_seq2_sq, n_bins),
-                        np.divide(np.square(sum_seq2), n_bins_sq)), 0.5)
-        covar = np.subtract(
-            np.divide(seq1_x_seq2, n_bins),
-            np.divide(np.multiply(sum_seq1, sum_seq2), n_bins_sq))
-        x_coef = np.divide(covar, np.multiply(std_seq1, std_seq2))
+        # bins with ~0 overlap (n_bins small) or ~0 local variance produce
+        # 0/0 and x/0 here -- expected and harmless, cleaned up by the
+        # posinf/neginf=0 nan_to_num below, so silence the routine warnings.
+        with np.errstate(invalid="ignore", divide="ignore"):
+            std_seq1 = np.power(
+                np.subtract(np.divide(sum_seq1_sq, n_bins),
+                            np.divide(np.square(sum_seq1), n_bins_sq)), 0.5)
+            std_seq2 = np.power(
+                np.subtract(np.divide(sum_seq2_sq, n_bins),
+                            np.divide(np.square(sum_seq2), n_bins_sq)), 0.5)
+            covar = np.subtract(
+                np.divide(seq1_x_seq2, n_bins),
+                np.divide(np.multiply(sum_seq1, sum_seq2), n_bins_sq))
+            x_coef = np.divide(covar, np.multiply(std_seq1, std_seq2))
         x_coef = np.real(x_coef)
-        return np.nan_to_num(x_coef)
+        # posinf/neginf=0 (not nan_to_num's huge-finite-number default): a
+        # correlation is only ever ill-defined (0/0 or x/0) at bins with
+        # near-zero overlap variance, where "no correlation information" is
+        # the correct value, not +-1.8e308 -- which downstream
+        # scipy.ndimage.rotate would interpolate into NaN over a much wider
+        # area than the single offending bin.
+        return np.nan_to_num(x_coef, posinf=0.0, neginf=0.0)
 
     def rotated_sacs(self, sac, angles):
         return [scipy.ndimage.rotate(sac, angle, reshape=False) for angle in angles]
@@ -147,6 +275,34 @@ class GridScorer(object):
 
         return (scores_60[max_60_ind], scores_90[max_90_ind],
                 self._masks[max_60_ind][1], self._masks[max_90_ind][1], sac)
+
+    def shuffled_gridness_threshold(self, ratemap, n_shuffles=100, percentile=95,
+                                     min_peak_frac=0.2, rng=None):
+        """This unit's own gridness significance threshold (Banino et al.
+        2018 Supplementary Methods 3d): segment `ratemap` into fields once,
+        then relocate them to random bins `n_shuffles` times and return the
+        `percentile`-th percentile of the resulting score_60 distribution.
+        A unit is "grid-like" if its real score_60 exceeds this -- its own,
+        rather than one fixed cutoff shared by every unit. Returns NaN if
+        the ratemap has no detectable fields (nothing to shuffle).
+        """
+        if rng is None:
+            rng = np.random.default_rng()
+        labels, n_fields = field_labels(ratemap, min_peak_frac=min_peak_frac)
+        if n_fields == 0:
+            return np.nan
+        null_scores = np.empty(n_shuffles)
+        for k in range(n_shuffles):
+            shuffled = shuffle_fields(ratemap, labels, n_fields, rng)
+            null_scores[k] = self.get_scores(shuffled)[0]
+        # a shuffled placement can occasionally starve calculate_sac's local
+        # std of overlap (std=0 -> 0/0 -> nan_to_num's +-inf fill-in ->
+        # overflow downstream); nanpercentile drops those instead of letting
+        # one degenerate draw poison the whole threshold.
+        null_scores[~np.isfinite(null_scores)] = np.nan
+        if np.all(np.isnan(null_scores)):
+            return np.nan
+        return np.nanpercentile(null_scores, percentile)
 
     def plot_ratemap(self, ratemap, ax=None, title=None, *args, **kwargs):
         if ax is None:

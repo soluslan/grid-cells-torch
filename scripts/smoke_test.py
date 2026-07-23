@@ -17,9 +17,10 @@ from dataset import build_dataloader
 from ensembles import HeadDirectionCellEnsemble, PlaceCellEnsemble
 from model import GridCellsRNN
 from scripts.convert_csv_to_shards import convert_all
+from train import build_optimizer
 from utils import encode_initial_conditions, encode_targets
 
-CSV_DIR = "square_room_100steps_2.2m_1000000"
+CSV_DIR = "data/square_room_100steps_2.2m_1000000"
 SHARD_DIR = "data/shards"
 SHARD_INDICES = [0, 1]
 
@@ -99,7 +100,7 @@ def step4_5_model_forward(cfg, batch, device):
     b = cfg.train.minibatch_size
     assert out.logits[0].shape == (b, 100, 256), out.logits[0].shape
     assert out.logits[1].shape == (b, 100, 12), out.logits[1].shape
-    assert out.bottleneck.shape == (b, 100, 256), out.bottleneck.shape
+    assert out.bottleneck.shape == (b, 100, 512), out.bottleneck.shape
     assert out.lstm_output.shape == (b, 100, 128), out.lstm_output.shape
     print("OK: output shapes match contract")
     return model, place_cell_ensembles, head_direction_ensembles, init_conds, targets, out
@@ -188,10 +189,7 @@ def main():
     loss = step6_loss(place_cell_ensembles, head_direction_ensembles, out, targets)
     step7_8_backward(model, loss, cfg)
 
-    optimizer = torch.optim.RMSprop([
-        {"params": model.decay_parameters(), "weight_decay": cfg.model.weight_decay},
-        {"params": model.no_decay_parameters(), "weight_decay": 0.0},
-    ], lr=cfg.train.learning_rate, momentum=cfg.train.momentum)
+    optimizer = build_optimizer(model, cfg)
 
     step9_optimizer_step(model, optimizer)
     step10_iterate(model, place_cell_ensembles, head_direction_ensembles, loader, cfg, device, optimizer)

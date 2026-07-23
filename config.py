@@ -24,7 +24,12 @@ class TaskConfig:
 @dataclass
 class ModelConfig:
     nh_lstm: int = 128
-    nh_bottleneck: int = 256
+    # Nature Fig. 1's main-text network (the one reporting "129/512, 25.2%
+    # grid-like units") used a 512-unit bottleneck; the publicly released
+    # google-deepmind/grid-cells code defaulted to 256 instead (matching the
+    # RL agent's grid code width). Set to 512 to target the paper's headline
+    # figure directly; set to 256 to match the released code / RL agent.
+    nh_bottleneck: int = 512
     dropout_rates: tuple = (0.5,)
     # NOTE: in the original repo this weight decay was registered as a Sonnet
     # `regularizer` but never actually summed into the optimized loss (dead
@@ -38,19 +43,28 @@ class ModelConfig:
 
 @dataclass
 class TrainConfig:
-    epochs: int = 1000
+    # 300 epochs x 1000 steps/epoch = 300,000 total gradient steps, matching
+    # the paper's Supplementary Table 1 "parameter updates" figure literally
+    # (the public code's train.py flag defaults imply 1,000,000 instead --
+    # see README "Known caveats" #1).
+    epochs: int = 300
     steps_per_epoch: int = 1000
     minibatch_size: int = 10
     learning_rate: float = 1e-5
     momentum: float = 0.9
-    # original repo used 1e-5 here, but that's ~7000x smaller than the actual
-    # gradient magnitudes measured in scripts/smoke_test.py (max |grad| ~0.07
-    # at init) -- with clip=1e-5 the clip saturates on essentially every step,
-    # making training extremely slow. Loosened to 1.0 (user's choice) so the
-    # clip only guards against extreme outliers rather than clamping every
-    # step to a fixed tiny value. Set back to 1e-5 to reproduce the original's
-    # literal (very slow) behavior.
-    grad_clip_value: float = 1.0  # torch.nn.utils.clip_grad_value_ -- element-wise abs clamp
+    # Original repo's literal value. This is ~150-7000x smaller than measured
+    # gradient magnitudes at every point checked so far (init: max|grad|~0.1;
+    # a checkpoint trained 1e6 steps under a loosened clip=1.0: max|grad|~14-25,
+    # with lstm.weight_ih_l0 having grown ~20x over that run) -- so at this
+    # threshold, clip_grad_value_ saturates on essentially every step,
+    # regardless of epoch. Previously loosened to 1.0 on the assumption this
+    # was just an impractically slow setting; reverted back to the literal
+    # value because the loosened run's LSTM weight blow-up (see memory/
+    # grad_clip_investigation.md) suggests the tiny clip may be functioning as
+    # an implicit stabilizer against exactly that kind of exploding-gradient
+    # RNN failure mode, not merely an oversight. Not yet confirmed by an
+    # actual from-scratch run at this value -- that's the next experiment.
+    grad_clip_value: float = 1e-5  # torch.nn.utils.clip_grad_value_ -- element-wise abs clamp
     save_every_n_epochs: int = 2
     results_dir: str = "results"
 

@@ -26,6 +26,11 @@ from model import GridCellsRNN
 from scores import GridScorer
 from utils import encode_initial_conditions
 
+# Paper's own shuffle-derived population threshold (Banino et al. 2018,
+# Supplementary Methods 3d) -- see README "Known caveats" for how this
+# differs from the paper's per-unit shuffle procedure.
+GRIDNESS_THRESHOLD = 0.37
+
 
 def build_ensembles(cfg, device):
     place_cell_ensembles = [
@@ -85,23 +90,58 @@ def score_units(scorer: GridScorer, xy: np.ndarray, activations: np.ndarray):
     return scores_60, ratemaps, sacs, mask_60
 
 
-def plot_units(scorer, ratemaps, sacs, mask_60, scores_60, out_path, title, cols=16):
+def compute_shuffle_thresholds(scorer: GridScorer, ratemaps, n_shuffles=100,
+                                min_peak_frac=0.2, seed=None, progress_every=32):
+    """Per-unit gridness thresholds via the paper's own null distribution
+    (field-shuffle, see scores.py) instead of one fixed cutoff for every
+    unit. Prints progress since this is the slow part of evaluation (each
+    unit needs `n_shuffles` full SAC computations)."""
+    rng = np.random.default_rng(seed)
+    thresholds = np.empty(len(ratemaps))
+    for i, rm in enumerate(ratemaps):
+        thresholds[i] = scorer.shuffled_gridness_threshold(
+            rm, n_shuffles=n_shuffles, min_peak_frac=min_peak_frac, rng=rng)
+        if progress_every and (i + 1) % progress_every == 0:
+            print(f"    shuffle threshold: {i + 1}/{len(ratemaps)} units done")
+    return thresholds
+
+
+def plot_units(scorer, ratemaps, sacs, mask_60, scores_60, out_path, title, cols=16,
+               threshold=GRIDNESS_THRESHOLD):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     from matplotlib.backends.backend_pdf import PdfPages
+    from matplotlib.patches import Rectangle
 
     n_units = len(ratemaps)
     ordering = np.argsort(-scores_60)
     rows = int(np.ceil(n_units / cols))
+    # threshold may be one shared cutoff (float) or one value per unit
+    # (per-unit shuffle threshold, possibly NaN for units with no fields --
+    # those never pass, since scores_60[index] > nan is always False).
+    threshold_arr = np.broadcast_to(np.asarray(threshold, dtype=float), scores_60.shape)
+    threshold_label = f"{float(threshold):.2f}" if np.ndim(threshold) == 0 else "per-unit shuffle 95th pct"
     fig = plt.figure(figsize=(24, rows * 4))
-    fig.suptitle(title)
+    fig.suptitle(f"{title}  (red = gridness > {threshold_label})")
     for i in range(n_units):
         index = ordering[i]
+        unit_threshold = threshold_arr[index]
+        passed = scores_60[index] > unit_threshold
         rf = plt.subplot(rows * 2, cols, i + 1)
         acr = plt.subplot(rows * 2, cols, n_units + i + 1)
-        scorer.plot_ratemap(ratemaps[index], ax=rf, title=f"{index} ({scores_60[index]:.2f})")
-        scorer.plot_sac(sacs[index], mask_params=mask_60[index], ax=acr)
+        # cmap="jet" matches the paper's Fig. 1d ratemap/SAC color scheme
+        # (blue=low -> red=high), not matplotlib's default viridis.
+        rf_title = (f"{scores_60[index]:.2f}" if np.ndim(threshold) == 0
+                    else f"{scores_60[index]:.2f}/{unit_threshold:.2f}")
+        scorer.plot_ratemap(ratemaps[index], ax=rf, title=rf_title, cmap="jet")
+        scorer.plot_sac(sacs[index], mask_params=mask_60[index], ax=acr, cmap="jet")
+        if passed:
+            rf.title.set_color("red")
+            rf.title.set_fontweight("bold")
+            for ax in (rf, acr):
+                ax.add_patch(Rectangle((0, 0), 1, 1, transform=ax.transAxes, fill=False,
+                                        edgecolor="red", linewidth=2))
 
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     with PdfPages(out_path) as pdf:
@@ -114,8 +154,17 @@ def main():
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--shard_dir", default="data/shards")
     parser.add_argument("--n_trajectories", type=int, default=4000)
-    parser.add_argument("--nbins", type=int, default=20)
+    parser.add_argument("--nbins", type=int, default=32)
     parser.add_argument("--out_dir", default="eval")
+    parser.add_argument("--shuffle_threshold", action=argparse.BooleanOptionalAction, default=True,
+                         help="per-unit gridness threshold via the paper's field-shuffle null "
+                              "distribution (Supplementary Methods 3d), instead of one fixed "
+                              f"cutoff ({GRIDNESS_THRESHOLD}) for every unit. Slower: "
+                              "n_units * n_shuffles extra SAC computations. Use --no-shuffle_threshold "
+                              "for the old fast fixed-cutoff behavior.")
+    parser.add_argument("--n_shuffles", type=int, default=100,
+                         help="shuffles per unit for --shuffle_threshold (paper uses 100)")
+    parser.add_argument("--shuffle_seed", type=int, default=0)
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -154,15 +203,35 @@ def main():
     for name, acts in [("bottleneck", bottleneck_acts), ("lstm", lstm_acts)]:
         print(f"scoring {acts.shape[1]} {name} units...")
         scores_60, ratemaps, sacs, mask_60 = score_units(scorer, xy, acts)
+        n_grid_like_fixed = (scores_60 > GRIDNESS_THRESHOLD).sum()
         print(f"  {name}: mean score_60={scores_60.mean():.3f}, "
               f"max={scores_60.max():.3f}, "
-              f"n_units with score_60>0.3 = {(scores_60 > 0.3).sum()}/{len(scores_60)}")
+              f"n_units with score_60>{GRIDNESS_THRESHOLD} (fixed threshold) = "
+              f"{n_grid_like_fixed}/{len(scores_60)}")
+
+        save_kwargs = {"scores_60": scores_60}
+        if args.shuffle_threshold:
+            print(f"  computing per-unit shuffle thresholds "
+                  f"({args.n_shuffles} shuffles/unit, this is the slow part)...")
+            thresholds = compute_shuffle_thresholds(
+                scorer, ratemaps, n_shuffles=args.n_shuffles, seed=args.shuffle_seed)
+            grid_like = scores_60 > thresholds  # nan threshold (no fields) -> never passes
+            n_grid_like = int(np.sum(grid_like))
+            print(f"  {name}: n_units grid-like (per-unit shuffle threshold) = "
+                  f"{n_grid_like}/{len(scores_60)} "
+                  f"(mean threshold={np.nanmean(thresholds):.3f}, "
+                  f"{np.isnan(thresholds).sum()} units had no detectable fields)")
+            plot_threshold = thresholds
+            save_kwargs["shuffle_thresholds"] = thresholds
+        else:
+            plot_threshold = GRIDNESS_THRESHOLD
+            save_kwargs["threshold"] = GRIDNESS_THRESHOLD
+
         out_path = os.path.join(args.out_dir, f"{name}_ratemaps_epoch{ckpt['epoch']}.pdf")
         plot_units(scorer, ratemaps, sacs, mask_60, scores_60, out_path,
-                   title=f"{name} units, checkpoint epoch {ckpt['epoch']}")
+                   title=f"{name} units, checkpoint epoch {ckpt['epoch']}", threshold=plot_threshold)
         print(f"  saved plot: {out_path}")
-        np.savez(os.path.join(args.out_dir, f"{name}_scores_epoch{ckpt['epoch']}.npz"),
-                 scores_60=scores_60)
+        np.savez(os.path.join(args.out_dir, f"{name}_scores_epoch{ckpt['epoch']}.npz"), **save_kwargs)
 
 
 if __name__ == "__main__":

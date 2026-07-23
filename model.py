@@ -52,7 +52,7 @@ class GridCellsRNN(nn.Module):
         self,
         target_ensembles: list[CellEnsemble],
         nh_lstm: int = 128,
-        nh_bottleneck: int = 256,
+        nh_bottleneck: int = 512,
         dropout_rates: tuple = (0.5,),
         bottleneck_has_bias: bool = False,
         init_weight_disp: float = 0.0,
@@ -89,6 +89,18 @@ class GridCellsRNN(nn.Module):
             _trunc_normal_init(layer.weight, displace=0.0)
             if layer.bias is not None:
                 nn.init.zeros_(layer.bias)
+
+        # Original's snt.LSTM adds a constant forget_bias=1.0 to the forget
+        # gate's pre-activation at every step ("to reduce the scale of
+        # forgetting in the beginning of training" -- Sonnet's own docstring).
+        # nn.LSTM has no such default: bias_ih_l0/bias_hh_l0 are laid out as
+        # 4 equal blocks in gate order [input, forget, cell, output], so add
+        # the missing +1.0 to the forget block of one of the two bias vectors
+        # (their sum is what feeds the forget gate, matching Sonnet adding
+        # forget_bias once on top of its single combined bias).
+        with torch.no_grad():
+            h = self.nh_lstm
+            self.lstm.bias_hh_l0[h:2 * h] += 1.0
 
     def forward(self, init_conds: list[torch.Tensor], vels: torch.Tensor) -> ModelOutput:
         """

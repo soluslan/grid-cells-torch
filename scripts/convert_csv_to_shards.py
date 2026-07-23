@@ -1,7 +1,7 @@
 """One-time conversion: our CSV trajectory dataset -> .npz shards ready for
 PyTorch training.
 
-Our CSVs (square_room_100steps_2.2m_1000000/NNNN-of-0099.csv) store, per row:
+Our CSVs (data/square_room_100steps_2.2m_1000000/NNNN-of-0099.csv) store, per row:
     trajectory_id, step, t, pos_x, pos_y, vel_x, vel_y, rot_vel,
     head_direction_x, head_direction_y, distance_travelled
 with exactly 100 contiguous rows (step=0..99, ascending) per trajectory_id,
@@ -12,10 +12,25 @@ The original grid-cells TFRecord dataset instead stored, per trajectory:
 using CENTER-origin coordinates (coord_range=(-1.1,1.1) for a 2.2m room).
 
 This script derives the latter from the former. See README.md for the field
-mapping and the reasoning behind the ego_vel reconstruction (rot_vel in our
-CSV is a fine-step instantaneous sample, not the true coarse step-to-step
-heading change, so dtheta is instead computed from consecutive head_direction
-unit vectors).
+mapping and the reasoning behind the ego_vel reconstruction.
+
+ego_vel's rotation component is `sin(dtheta), cos(dtheta)`, where `dtheta`
+is the angle between consecutive `head_direction` unit vectors (i.e. the
+*net* heading change actually realized over one stored 0.15s step) -- NOT
+`sin(rot_vel), cos(rot_vel)` using the CSV's raw `rot_vel` column, which was
+tried and empirically failed despite being closer to the paper's literal
+per-step spec `[v_t, sin(phi_dot_t), cos(phi_dot_t)]` (Methods). Three
+from-scratch training runs (raw `rot_vel`; clipped to +-3*sigma_phi; rescaled
+by the coarse step and clipped to +-pi) all plateaued around loss 7.0-7.1,
+while `dtheta` reaches ~4.9 over the same 40 epochs -- confirmed not a
+dataset-seed confound (dtheta on the same reseeded CSVs also reaches ~4.9).
+Root cause: `rot_vel` is an *instantaneous rate* sampled at a single fine
+(0.02s) instant within each 0.15s coarse step (which contains ~7.5 fine
+sub-steps), so it only reflects whatever was happening at that one moment
+and misses the rest of the step -- no amount of clipping/rescaling that
+single sample fixes it, since the problem is which quantity is measured,
+not its scale. `dtheta` instead directly measures the *net* change across
+the whole step, which is what's actually needed here.
 """
 
 import argparse
@@ -78,9 +93,9 @@ def csv_shard_to_arrays(df: pd.DataFrame, n_traj: int, n_steps: int,
     # 7. speed
     speed = np.sqrt(vel_x ** 2 + vel_y ** 2)  # [N,T]
 
-    # 8. dtheta from consecutive head_direction unit vectors (not rot_vel*dt --
-    # see module docstring / README for why). Self-referential at t=0 so
-    # dtheta[:,0] == 0 exactly.
+    # 8. dtheta: net heading change over this 0.15s step, from consecutive
+    # head_direction unit vectors (see module docstring for why this beats
+    # rot_vel). Self-referential at t=0 so dtheta[:,0] == 0 exactly.
     prev_hd_x = np.concatenate([hd_x[:, 0:1], hd_x[:, :-1]], axis=1)
     prev_hd_y = np.concatenate([hd_y[:, 0:1], hd_y[:, :-1]], axis=1)
     cross = prev_hd_x * hd_y - prev_hd_y * hd_x
@@ -125,7 +140,7 @@ def convert_all(csv_dir: str, out_dir: str, shard_indices: list[int] | None = No
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--csv_dir", default="square_room_100steps_2.2m_1000000")
+    parser.add_argument("--csv_dir", default="data/square_room_100steps_2.2m_1000000")
     parser.add_argument("--out_dir", default="data/shards")
     parser.add_argument("--shard_indices", type=int, nargs="*", default=None,
                          help="convert only these shard indices (e.g. 0 1); default: all")

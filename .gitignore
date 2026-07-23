@@ -1,12 +1,13 @@
 # Large generated datasets -- regenerate via make_dataset.ipynb
-square_room_100steps_2.2m_1000000/
+data/square_room_100steps_2.2m_1000000/
 
 # Large converted training shards -- regenerate via scripts/convert_csv_to_shards.py
 data/shards/
 
-# Training checkpoints (500 files, ~1.4GB) -- regenerate via train.py.
-# Keep specific checkpoints worth sharing by copying them into eval/
-# instead (that folder is NOT ignored -- see below).
+# Training checkpoints (one per save_every_n_epochs, size/count depends on
+# TrainConfig.epochs) -- regenerate via train.py. Keep specific checkpoints
+# worth sharing by copying them into eval/ instead (that folder is NOT
+# ignored -- see below).
 results/
 
 # Run logs
