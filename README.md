@@ -2,443 +2,525 @@
 
 PyTorch reimplementation of [google-deepmind/grid-cells](https://github.com/google-deepmind/grid-cells)
 (Banino et al. 2018, Nature, "Vector-based navigation using grid-like
-representations in artificial agents"). The original repo is TF1 + Sonnet v1
-and does not run on current package versions (`tf.contrib.*` was removed in
-TF2, Sonnet v1's `snt.AbstractModule`/`snt.RNNCore` were redesigned in v2, the
-TF1 queue-based data API was removed in TF2, `tf.flags`/`tf.app.run()` were
-removed, and there's even a bare Python-2 `xrange`) -- so this is a from-scratch
-port, not a patch.
+representations in artificial agents") — the paper's **supervised**
+path-integration network (Fig. 1 / Methods / Supplementary Methods 3a–b).
 
-Uses our own dataset at `data/square_room_100steps_2.2m_1000000/` (generated in
-`make_dataset.ipynb` using the paper's own Supplementary Information
-Table 1 motion-model parameters) instead of the original's TFRecord release.
+The original is TF1 + Sonnet v1 and does not run on current versions
+(`tf.contrib.*`, `snt.AbstractModule`, the TF1 queue data API and
+`tf.flags` are all gone; there is even a bare Python-2 `xrange`), so this is
+a from-scratch port, not a patch. It also uses our own dataset, generated in
+`notebooks/00_make_dataset.ipynb` from the paper's Supplementary Table 1
+motion-model parameters, rather than the original's unpublished TFRecord
+release.
 
-## Two things ported deliberately differently from the original
+## Following the paper, not the released code
 
-1. **Weight decay is actually applied here.** The original's `model.py`
-   registered Sonnet `regularizers` on the bottleneck/output-head weights, but
-   `train.py`'s optimized loss only ever summed the two cross-entropy terms --
-   nothing anywhere calls `tf.losses.get_regularization_loss()`. As published,
-   `model_weight_decay=1e-5` never affected training. Here it's wired into
-   real optimizer param groups (`model.decay_parameters()` /
-   `model.no_decay_parameters()` in `model.py`, used in `train.py`). Set
-   `ModelConfig.weight_decay = 0.0` to reproduce the original's literal (no
-   regularization) behavior.
-2. **`nh_embed` is dropped.** It was accepted and stored in the original's
-   `GridCellsRNNCell.__init__` but never used to build anything in `_build()`
-   -- dead config surface, not carried over.
+Where the paper and the released code disagree, this port follows the
+**paper**. In every case the released code contains the machinery for the
+paper's version but never switches it on.
 
-## A detail the paper's equations omit but the code (both original and here) implements
+| | Paper | Released code | Here |
+|---|---|---|---|
+| Gradient clipping scope | output heads (`g→y`, `g→z`) | all parameters | output heads |
+| Weight decay scope | output-head **weights** | + bottleneck weight | output-head weights |
+| Gridness formula | `min(c60,c120) − max(c30,c90,c150)` | mean-based variant | paper's |
+| Gridness annulus | 8→20 bins, step 2 | 0.2→0.4‥1.0 × nbins | paper's |
+| Ratemap bins | 32×32 (20×20 for border score) | 20×20 | 32×32 / 20×20 |
+| Bottleneck width | 512 (Fig. 1) / 256 (Ext. Data Fig. 3d, RL agent) | 256 | 256 |
+| Grid-like criterion | one 0.37 cutoff for all units | — | 0.37 |
 
-The paper's Methods describes the LSTM's initial cell/hidden state as a
-plain linear transform of the t=0 place/head-direction encoding, e.g.
-`l_0 = W^cp c_0 + W^cd h_0` (Extended Data Fig. 1) -- no bias term shown.
-Both the original (`snt.Linear(nh_lstm, name="state_init")` /
-`"cell_init"`, and Sonnet's `Linear` defaults to `use_bias=True`) and this
-port (`state_init`/`cell_init` are plain `nn.Linear(n_init_in, nh_lstm)`,
-which also defaults to `bias=True`) actually include a learned bias in this
-computation. This isn't a deviation this port introduces -- both
-implementations agree with each other, just not with the paper's simplified
-written equation -- but it's easy to miss if you're cross-referencing the
-paper's math against the code.
+Both scope items come from one Methods sentence pattern — *"parameters
+projecting from the dropout layer, g⃗ₜ, to the place and head-direction cell
+predictions y⃗ₜ and z⃗ₜ"* for clipping, and the same phrase with **weights**
+for weight decay. Note "parameters" (weights + biases) vs "weights" only.
+`TrainConfig.grad_clip_scope` / `ModelConfig.weight_decay_scope` accept
+`"bottleneck_and_heads"` (the original's unused `clip_bottleneck_gradient`)
+and, for clipping, `"all"` (its actual default).
+
+**Caveat on clipping.** The paper justifies clipping by exploding gradients
+in *recurrent* networks, yet scopes it to the feedforward heads only, leaving
+the LSTM unclipped. That tension is unresolvable from the paper alone, which
+is why all three scopes remain selectable.
+
+### Other deliberate differences
+
+1. **Weight decay is actually applied.** The original registered Sonnet
+   `regularizers` but never summed them into the optimized loss, so
+   `model_weight_decay=1e-5` never affected training. Set
+   `ModelConfig.weight_decay = 0.0` for the original's literal behavior.
+2. **`nh_embed` is dropped** — stored but never used to build anything.
+3. **A learned bias in the LSTM init.** The paper's Extended Data Fig. 1
+   writes `l₀ = W^cp c₀ + W^cd h₀` with no bias, but both the original
+   (`snt.Linear` defaults to `use_bias=True`) and this port include one. The
+   two implementations agree with each other, just not with the equation.
+
+### Two numbers worth knowing
+
+**The 0.37 cutoff.** A unit is grid-like iff `gridness > 0.37`; one cutoff for
+every unit, which is what the paper actually does. It derived that number from
+a per-unit field shuffle and then collapsed it (Methods): *"The means, over
+units, of the thresholds obtained were >0.37 […] Units exceeding these
+thresholds were considered to be grid-like."* So the shuffle is how 0.37 was
+derived, not how units were judged. Re-deriving our own was dropped — it
+cannot improve the model, only relabel it.
+
+**The annulus inner radius is ours, not the paper's.** `8→20` is the outer
+radius; the inner one the paper gives only as "the central peak excluded",
+with no value. Excluding it is not optional — the central peak is rotationally
+symmetric, so it correlates with itself equally at every rotation and washes
+out the contrast gridness measures. `DEFAULT_INNER_RADIUS_BINS = 4.0` is what
+the released code's fractional `0.2` came to at its own `nbins=20`. Far from
+negligible — see Results, "Everything about the representation," for the full
+sensitivity sweep at 256 units (a ~5.7× swing) and why it isn't just adopted
+as a fix.
 
 ## Pipeline
 
 ```
-data/square_room_100steps_2.2m_1000000/*.csv
-        │  scripts/convert_csv_to_shards.py
+data/square_room_100steps_2.2m_1000000/*.csv      00_make_dataset.ipynb
+        │  dataset.py: convert_all()               01_prepare_data.ipynb
         ▼
 data/shards/*.npz   (init_pos, init_hd, ego_vel, target_pos, target_hd)
-        │  dataset.py (GridCellsDataset / DataLoader)
-        ▼
-train.py  (ensembles.py targets + model.py GridCellsRNN)
-        ▼
-results/checkpoint_epoch*.pt
-        │  scripts/evaluate.py (scores.py GridScorer)
-        ▼
-eval/*_ratemaps_epoch*.pdf, eval/*_scores_epoch*.npz
+        │  train.py (ensembles.py targets, model.py GridCellsRNN)
+        ▼                                          02_train.ipynb
+data/checkpoints/<run>/checkpoint_epoch*.pt
+        │  evaluate.py (scores.py measures, figures.py draws)
+        ▼                                          03_path_integration.ipynb
+results/<run>/path_integration_epoch*.png          04_bottleneck_units.ipynb
+results/<run>/{bottleneck,lstm}_ratemaps_epoch*.pdf
+results/<run>/cell_types_epoch*.png                05_cell_types.ipynb
 ```
 
-### Data field mapping (our CSV -> model input/targets)
+The three analysis notebooks split by question, not by layer: 03 asks whether
+the network path-integrates at all, 04 whether grid-like units emerged, 05 what
+else is in that layer and whether it holds still across training.
 
-Our CSV has corner-origin `pos_x,pos_y` (range ~[0, 2.2]), allocentric
-`vel_x,vel_y`, and `head_direction_x,head_direction_y` unit vectors. The
-original TFRecord dataset used **center-origin** coordinates
-(`coord_range=(-1.1,1.1)`) and an **egocentric** 3-component velocity input
-(`ego_vel`, shape `[100,3]`) whose exact composition was never published (only
-the TFRecord *reader* is open-sourced, not the trajectory-generation code that
-produced `ego_vel`). `scripts/convert_csv_to_shards.py` derives:
+### Where things live
 
-- `pos_centered = pos_{x,y} - 1.1`
-- `theta = arctan2(head_direction_y, head_direction_x)`
-- `init_pos/init_hd` = `pos_centered`/`theta` at step 0; `target_pos/target_hd` = all 100 steps
-- `speed = sqrt(vel_x**2 + vel_y**2)`
-- `ego_vel = stack([speed, sin(dtheta), cos(dtheta)])`, where `dtheta` is the
-  net heading change between consecutive stored `head_direction` unit
-  vectors (`arctan2(cross, dot)` of consecutive steps) -- **not** the CSV's
-  raw `rot_vel` column, even though `[v_t, sin(phi_dot_t), cos(phi_dot_t)]`
-  built from `rot_vel` looks more literally paper-like on paper. `rot_vel`
-  was tried (in three variants) and consistently made training stall --
-  see "Why `rot_vel` doesn't work for `ego_vel`" below for the full
-  root-cause investigation and "Known caveats" #3 for the summary. Still a
-  reconstruction either way, not a confirmed fact (DeepMind's exact
-  `ego_vel` composition was never published, only the TFRecord *reader*).
+**`.py` is library, notebooks are execution.** No module has a CLI or a
+`__main__`; the notebooks import them and implement nothing themselves. Run the
+notebooks in numeric order.
 
-### Two different Δt's in `make_dataset.ipynb`
+**`data/` is large and regenerable, `results/` is small and kept.** That single
+split is what `.gitignore` follows, so nothing large can leak into the
+repository by accident and nothing worth keeping can be lost to a wildcard.
 
-The Supplementary Information's Table 1 (`41586_2018_102_MOESM1_ESM.pdf`)
-lists `T=15` ("Duration of simulated trajectories"), `Δt=0.02`
-("**Simulation**-step time increment"), and `trajectory length=100`
-("Number of time steps in the trajectories used for the supervised learning
-task") as three *separate* rows -- Δt=0.02s is explicitly the fine physics-
-simulation step, not the spacing between the 100 steps fed to the network.
-`make_dataset.ipynb` matches this: it simulates the rat's continuous motion
-at `dt=0.02s` (750 fine steps, needed for the near-wall behaviour to work at
-all -- `d=0.03m` is a thin perimeter that a coarser step could skip over
-without ever registering "near wall"), then resamples down to the 100
-target times spaced `T/100=0.15s` apart (`t_target =
-np.linspace(0, T, 100, endpoint=False)`) that are actually stored/trained
-on. `rot_vel` is generated at the fine 0.02s resolution and then
-interpolated onto those 100 coarse times.
+| | holds | tracked? |
+|---|---|---|
+| `*.py` (repo root) | the whole pipeline, as importable modules | yes |
+| `notebooks/` | every workflow: make data → prepare → train → analyse | yes |
+| `data/` | **everything large**: datasets, shards, weights | **no** |
+| `results/<run>/` | figures, one folder per training run | yes |
 
-### Why `rot_vel` doesn't work for `ego_vel` -- `dtheta` is used instead
+`<run>` is whatever `cfg.train.results_dir` was named at training time.
+**A fresh clone has `results/` but no `data/`** — the figures are committed, the
+things that produce them are not, and the notebooks rebuild those:
 
-**The bug.** `rot_vel` is a *rate* (rad/s), but `sin`/`cos` only meaningfully
-distinguish values within one period (`2*pi ≈ 6.28`). `sigma_phi` (the
-rotational-velocity std, `330 deg/s ≈ 5.76 rad/s`, Supplementary Table 1) is
-already almost as large as that whole period. Under a zero-mean Gaussian
-with that std, **58.5% of *all* rotation samples -- ordinary ones, nothing
-to do with walls -- have `|rot_vel| > pi`** and wrap the unit circle at
-least partway before ever reaching `sin`/`cos`; `27.5%` wrap a full turn or
-more. On top of that, the motion model's wall-avoidance behaviour
-(`_wall_redirect` in `make_dataset.ipynb`) can turn the heading by up to
-~90 degrees in a single *fine* `dt=0.02s` step (see "Two different Δt's"
-above), and dividing that near-instant turn by `0.02s` produces true
-outliers -- `rot_vel` was measured reaching **+-92 rad/s** at those moments,
-versus roughly +-20 rad/s away from walls. A from-scratch training run with
-raw `rot_vel` visibly stalled (loss plateaued around 6.96 instead of
-continuing down to ~3.5 like the healthy prior run).
+```
+data/                                    (gitignored, ~19GB)
+    square_room_100steps_2.2m_1000000/   ~17GB, 100 CSVs   00_make_dataset.ipynb
+    shards/                              ~2.3GB, 100 .npz  01_prepare_data.ipynb
+    checkpoints/<run>/                   ~45MB per run     02_train.ipynb
 
-**Two attempted fixes, both failed.** Clipping `rot_vel` to `+-3*sigma_phi`
-(~17.3 rad/s) before `sin`/`cos` only touches the ~0.4% wall-bounce tail and
-leaves the other 58% of ordinary-but-large samples unaddressed -- loss still
-stalled (~7.07). Rescaling by `COARSE_DT` (~0.15s, this dataset's actual
-per-training-step spacing) into an angle-like quantity, then clipping to
-`+-pi`, also stalled (~7.06) -- essentially identical to the unscaled case.
-
-**Root cause, and the actual fix: use `dtheta` instead.** Both `rot_vel`
-variants above share the same underlying problem regardless of scale/
-clipping: `rot_vel` is an *instantaneous* rate sampled at a single fine
-(0.02s) instant within each 0.15s coarse step (which spans ~7.5 fine
-sub-steps), so it only reflects whatever was happening at that one moment
-and misses the rest of the step. `dtheta` -- the angle between consecutive
-stored `head_direction` unit vectors, i.e. the *net* heading change actually
-realized over the full 0.15s step -- measures the right quantity instead,
-and is what `scripts/convert_csv_to_shards.py` uses (confirmed not a
-dataset-reseed confound: `dtheta` reaches ~4.9 on both the original and a
-reseeded dataset, matching the healthy prior run; see that file's module
-docstring for the full investigation).
-
-## Running it
-
-```bash
-# (run from inside this repo's root)
-
-# 1. smoke test first: converts only 2 shards + a few training iterations
-python scripts/smoke_test.py
-
-# 2. once that passes, convert the full dataset (~2-5 min)
-python scripts/convert_csv_to_shards.py --csv_dir data/square_room_100steps_2.2m_1000000 --out_dir data/shards
-
-# 3. train (300 epochs x 1000 steps/epoch = 300,000 gradient steps total,
-#    minibatch=10 -- see "Training adjustments made" below. ~34min on a GTX 1650)
-python train.py
-
-# 4. evaluate a checkpoint for grid-cell-like periodicity
-python scripts/evaluate.py --checkpoint results/checkpoint_epoch299.pt
+results/                                 (tracked, ~12MB)
+    baseline/                            the 256-unit run these Results describe
+    nodropout/                           its dropout_rates=(0.0,) control
+    superseded_512unit/                  the older 512-unit run, kept for reference
 ```
 
-## Training adjustments made
+`data/checkpoints/` and `results/` pair up by run name, except for the six-run
+seed sweep: those trained into `data/checkpoints/seed{1,2}_dropout{0.5,0.0}/`
+and produced only the summary numbers in Results, no figures of their own.
 
-The original's `lr=1e-5` + gradient clip `1e-5` (`training_clipping`,
-applied via `tf.clip_by_value` -- ported here as
-`torch.nn.utils.clip_grad_value_`, an element-wise abs-clamp, **not**
-`clip_grad_norm_`) is an aggressive combination. `scripts/smoke_test.py`
-step 7/8 measured real gradient magnitudes at init (~0.07-0.15) and found
-them ~7000x larger than the clip value -- meaning every step would clamp to
-a constant `+-1e-5`, regardless of the true gradient's magnitude.
+New large artefacts belong under `data/` too, with their own line in
+`.gitignore`. The subfolders are ignored individually rather than ignoring
+`data/` wholesale, so that the ignore list doubles as the inventory of what
+should be there.
 
-**This was previously "fixed" by loosening `grad_clip_value` to `1.0`**, on
-the assumption that the literal value would just make training pointlessly
-slow. That run completed (1e6 steps, `results/checkpoint_epoch998.pt`), but
-inspecting it turned up a bigger problem than slowness: `lstm.weight_ih_l0`
-had grown ~20x (max|w| 0.11 -> 2.11) and gradients at that checkpoint were
-~150-200x *larger* than at init (max|grad| ~14-25 vs ~0.1) -- the LSTM's
-recurrent weights drifted into an exploding-gradient regime over the 100-step
-BPTT unroll, unconstrained by anything else (no `hidden_clip_value`/
-`cell_clip_value`, which the original's `snt.LSTM` supports but neither the
-original `model.py` nor this port ever enables).
+To compare configurations, set `cfg.train.results_dir =
+"data/checkpoints/<name>"` in `02_train.ipynb`; `evaluate.default_out_dir()`
+pairs it with `results/<name>/` automatically, so naming the run once keeps a
+sweep's outputs apart.
 
-That reframes the literal `1e-5` clip: under a constant-magnitude clip,
-RMSprop's own per-parameter magnitude normalization becomes redundant (its
-running average of squared gradients converges to `(1e-5)^2` regardless of
-the true gradient), so the whole optimizer degenerates toward a fixed-step,
-sign-of-gradient-only update (the Rprop lineage RMSprop was itself
-generalized from) -- slow per step, but structurally incapable of the kind
-of runaway weight growth seen above, since no single step can ever exceed
-the clip. **Reverted `grad_clip_value` back to the paper's literal `1e-5`**
-(`config.py`, `TrainConfig.grad_clip_value`) on the hypothesis that it may be
-an implicit stabilizer against this exact failure mode rather than just an
-oversight.
-
-**Confirmed (2026-07-22): a from-scratch run at the literal `1e-5` clip,
-`nh_bottleneck=512`, 300,000 steps (300 epochs x 1000 steps/epoch) completed
-cleanly** -- loss decreased smoothly and monotonically (7.79 -> 3.57) with no
-NaN/divergence, and evaluation found grid-like units at a much higher rate
-than the earlier loosened-clip/256-bottleneck run (see "Results so far"
-below). This is consistent with, though not yet definitive proof of, the
-stabilizer hypothesis -- LSTM weight norms were not directly tracked during
-this run, so "loss didn't explode" is suggestive but not the same as
-confirming weights stayed bounded the way the earlier `clip=1.0` run's
-post-hoc weight inspection showed they hadn't. `learning_rate` itself
-remains at the paper's literal `1e-5`.
-
-## Evaluating a trained model
-
-`scripts/evaluate.py` loads a checkpoint, runs inference only (no
-training/dropout) over a batch of trajectories, and uses `scores.py`'s
-`GridScorer` (ported from the original's `scores.py`: ratemaps via
-`scipy.stats.binned_statistic_2d`, spatial autocorrelograms via
-`scipy.signal.convolve2d`, gridness scores via rotation-based Pearson
-correlation) to check whether grid-cell-like hexagonal periodicity emerged,
-scoring the bottleneck (`ModelConfig.nh_bottleneck`, 512 units by default)
-and raw LSTM output (128 units) layers separately.
-
-```bash
-# default: per-unit shuffle threshold (the paper's actual methodology --
-# see "Known caveats" #5 -- but slow: ~30-40min for 512+128 units at 100
-# shuffles/unit)
-python scripts/evaluate.py --checkpoint results/checkpoint_epoch299.pt
-
-# fast alternative: one fixed GRIDNESS_THRESHOLD=0.37 cutoff for every unit
-python scripts/evaluate.py --checkpoint results/checkpoint_epoch299.pt --no-shuffle_threshold
-```
-
-Produces, per layer, in `eval/`:
-- `{bottleneck,lstm}_ratemaps_epoch{N}.pdf` -- one ratemap + autocorrelogram
-  per unit, sorted by gridness score. Units that pass their threshold are
-  highlighted with a red border and a red bold title (`score`, or
-  `score/threshold` in the default per-unit shuffle mode) so they're
-  visible at a glance in the 16-column grid.
-- `{bottleneck,lstm}_scores_epoch{N}.npz` -- raw `scores_60` array (plus
-  `shuffle_thresholds`, one per unit, in the default shuffle mode)
-
-`n_trajectories=4000` is sampled with `shuffle=True`, so re-running
-`evaluate.py` on the same checkpoint gives slightly different scores/counts
-each time (different random trajectory sample) -- expect small run-to-run
+Training is ~28 minutes for the paper's 300,000 steps and there is **no
+resume** — an interrupted run restarts from epoch 0. Checkpoints land every
+`save_every_n_epochs` (20 — ~16 per run rather than 151, while still hitting
+epoch 200 and 299, the two points the paper's inter-trial stability analysis
+compares). Only figures are saved from evaluation: nothing reads intermediate
+arrays and re-running is a couple of minutes. `n_trajectories=4000` is sampled
+with `shuffle=True`, so re-running shifts the numbers slightly — run-to-run
 noise, not a bug.
 
-A checkpoint (`results/checkpoint_epoch*.pt`) is a zip archive containing a
-pickled dict with `model` (state_dict), `optimizer` (state_dict, 2 param
-groups), and `epoch` (int) -- saved every `save_every_n_epochs` (2) epochs
-by `train.py`.
+## Dataset reconstruction
 
-## Results so far
+Our CSV has corner-origin `pos_x,pos_y` (~[0, 2.2]), allocentric `vel_x,vel_y`
+and `head_direction_{x,y}` unit vectors. The original TFRecord used
+**center-origin** coordinates and a 3-component **egocentric** `ego_vel`
+whose composition was never published (only the *reader* was open-sourced).
+`dataset.py`'s `csv_shard_to_arrays` derives:
 
-**Current run** (2026-07-23): 300,000 gradient steps (300 epochs x 1000
-steps/epoch, minibatch=10, ~34min on a GTX 1650), using the current
-`config.py` defaults -- `nh_bottleneck=512`, `grad_clip_value=1e-5` (the
-paper's literal value, reverted from an earlier loosened `1.0` -- see
-"Training adjustments made"), `dtheta`-based `ego_vel`. Loss converged from
-~7.79 to ~3.60. Evaluated at `checkpoint_epoch299.pt` with one
-`evaluate.py --shuffle_threshold` run, which computes both the fixed
-`GRIDNESS_THRESHOLD=0.37` cutoff and the paper's actual per-unit shuffle
-threshold (100 shuffles/unit -- see "Known caveats" #5 and
-`notebooks/gridness_shuffle_explainer.ipynb` for how the latter works):
+- `pos_centered = pos − 1.1`, `theta = arctan2(hd_y, hd_x)`
+- `init_*` = step 0; `target_*` = all 100 steps
+- `ego_vel = [speed, sin(dtheta), cos(dtheta)]`
 
-| layer      | units | mean gridness | max gridness | gridness > fixed 0.37 | gridness > own shuffle threshold | mean per-unit threshold |
-|------------|-------|----------------|--------------|------------------------|-----------------------------------|--------------------------|
-| bottleneck | 512   | 0.144          | 1.481        | 92 (18.0%)             | **39 (7.6%)**                     | 0.557                    |
-| raw LSTM   | 128   | -0.011         | 1.169        | 11 (8.6%)              | **5 (3.9%)**                      | 0.562                    |
+### Two different Δt's
 
-(counts/means fluctuate slightly run-to-run -- `n_trajectories=4000` is a
-different random sample each time, see note above; figures here are from
-one representative run. Separately re-confirmed these numbers aren't a
-seed artifact: the dataset was regenerated from scratch with the original
-per-file RNG seeding (`np.random.seed(file_idx)` in `make_dataset.ipynb`,
-after a personal detour testing an offset seed), and both loss (~3.60 vs
-the offset-seed run's ~3.57) and grid-like rates land in the same range
-either way.)
+Supplementary Table 1 lists `T=15`, `Δt=0.02` ("**simulation**-step time
+increment") and `trajectory length=100` as three separate rows — Δt is the
+fine physics step, not the spacing of the 100 stored steps.
+`make_dataset.ipynb` simulates at `dt=0.02s` (750 steps; needed for the
+`d=0.03m` wall perimeter to register at all), then resamples to 100 steps
+spaced `T/100 = 0.15s` apart.
 
-**Provisional note on the shuffle-threshold column.** A follow-up check
-found that real trained units' ratemaps get inconsistently
-over-segmented by the current (unsmoothed) watershed step -- field counts
-across the 512 bottleneck units ranged from 1 to **86** (out of 1024 bins),
-unlike the clean, few-field synthetic example in the explainer notebook.
-This likely inflates or destabilizes individual per-unit thresholds for
-the noisier units. A fix (Gaussian-smoothing the ratemap before field
-segmentation only, not before scoring) has been identified but is
-deliberately not yet applied -- **treat the 39/512 and 5/128 numbers above
-as provisional**, likely to shift once that's addressed.
+### Why `dtheta`, not `rot_vel`
 
-The per-unit shuffle procedure is noticeably *stricter* here either way:
-its average per-unit threshold (~0.56) is well above the paper's own fixed
-0.37, meaning our network's ratemaps -- for whatever reason (the
-over-segmentation issue above, field count/size/shape, resolution, or a
-difference between our shuffle implementation and DeepMind's undisclosed
-original) -- can already fake a higher gridness score than 0.37 just by
-rearranging their own fields at random. So the honest, paper-methodology
-grid-like rate for this checkpoint is closer to **~7.6% (bottleneck)**, not
-~18.0% -- further from the paper's 25.2% than the fixed-threshold number
-suggested, not closer.
+`ego_vel`'s rotation component looks like it should be the paper's literal
+`[v_t, sin(φ̇_t), cos(φ̇_t)]` built from the CSV's `rot_vel`. It was tried in
+three variants (raw; clipped to ±3σ_φ; rescaled by the coarse step and
+clipped to ±π) and **all three stalled training** (loss plateaued ~6.96–7.07
+vs `dtheta`'s ~3.5–4.9).
 
-This is a sizeable jump from the previous run below, though still short of
-the paper's reported 129/512 (25.2%). Notably, the raw LSTM layer now also
-shows some grid-like units, unlike the previous run's 0/128 -- worth
-watching whether that persists across re-evaluations, since the paper
-frames grid-like periodicity as bottleneck-specific.
+Root cause: `rot_vel` is an *instantaneous rate* sampled at one fine 0.02s
+instant inside each 0.15s step (~7.5 sub-steps), so it misses most of the
+step — no rescaling fixes *which quantity is measured*. It is also badly
+scaled for `sin`/`cos`: with `σ_φ = 330°/s ≈ 5.76 rad/s`, 58.5% of ordinary
+samples exceed π and wrap, and wall-avoidance turns produce ±92 rad/s
+outliers. `dtheta` — the net heading change actually realized over the step,
+from consecutive stored `head_direction` vectors — measures the right thing.
+Confirmed not a dataset-reseed confound.
 
-**Previous run** (256-unit bottleneck, loosened `grad_clip_value=1.0`,
-threshold `0.3`, 1,000,000 steps, `checkpoint_epoch998.pt`, loss ~8.04 ->
-~2.18) -- kept here for comparison, not reproducible from current
-`config.py` defaults:
+## Results
 
-| layer      | units | gridness > 0.3 | max gridness |
-|------------|-------|-----------------|--------------|
-| bottleneck | 256   | 8 (3%)          | 1.07         |
-| raw LSTM   | 128   | 0 (0%)          | --           |
+**Run of 2026-08-07**, at the default `nh_bottleneck=256`: 300,000 gradient
+steps (300 epochs × 1000, minibatch=10, 26m36s on a GTX 1650), paper-scoped
+clipping and weight decay, literal `1e-5` learning rate and clip, bottleneck
+bias per the paper, `seed=0`. Loss **7.820 → 3.673**, monotone. Evaluated at
+`checkpoint_epoch299.pt` over 4000 trajectories.
 
-Both runs qualitatively reproduce the paper's central claim -- grid-like
-periodicity concentrates in the bottleneck far more than in the raw
-recurrent state. See "Known caveats" below for remaining gaps to the
-paper's reported rate.
+**Why 4000.** It is the released code's `training_evaluation_minibatch_size`
+(`grid-cells/train.py`); the paper never states an evaluation sample size.
+It buys ratemap resolution: 4000 × 100 steps = 400,000 (position, activation)
+samples spread over 32×32 = 1024 bins, so ~390 samples per bin. At 1000
+trajectories that falls to ~98 and at 500 to ~49, where single-bin noise starts
+showing up in the autocorrelogram and so in gridness. Nothing about training
+depends on it — it only sets how well-estimated each ratemap is.
 
-## Known caveats / tuning candidates for the next run
+**There is no held-out split.** Training and evaluation both call
+`build_dataloader(..., shard_indices=None)`, so the 4000 evaluation
+trajectories are drawn from the same 1,000,000-trajectory pool the network
+trained on. This is inherited from the released code, which evaluates off the
+same input queue it trains from, and the paper does not describe a split
+either. It matters less here than it would elsewhere: training presents
+3,000,000 trajectories total, so each of the million is seen about three times,
+and the quantities of interest are representational (does a ratemap look
+hexagonal) rather than predictive. The path-integration error is the exception —
+that *is* a performance number, and it is measured in-sample. Holding out ten
+shards would cost nothing but has not been done.
 
-Ranked roughly by how likely each is to close the gap with the paper's
-reported grid-cell emergence rate:
+> **At 256 units the paper's comparison is 56/256 = 21.9%** (Extended Data
+> Fig. 3d, circular arena), not the 25.2% headline, which is a 512-unit figure.
+> A superseded 512-unit run of 2026-07-30 scored 37/512 (7.2%); its figures are
+> kept under `results/superseded_512unit/` and its checkpoint no longer loads
+> into the default model.
 
-1. **`parameter_updates` count mismatch.** The paper's own Supplementary
-   Table 1 states 300,000 total gradient steps, but the public GitHub
-   `train.py` flag defaults imply 1,000,000 (`epochs=1000 x
-   steps_per_epoch=1000`, `config.py`'s current defaults). We trained with
-   the code's 1,000,000, not the paper's stated 300,000 -- unclear which
-   figure actually produced the paper's published results.
-2. **Bottleneck width -- now matched to the paper's headline number, and
-   retrained.** The Nature main text's Fig. 1 network (the one reporting
-   "129/512 (25.2%) grid-like units") uses a 512-unit linear bottleneck. The
-   publicly released `google-deepmind/grid-cells` code instead defaulted to
-   256 units -- the same width later reused for the RL agent's grid code in
-   the paper's Fig. 2-4 (Extended Data Fig. 6a: "256 linear layer units",
-   21.4% grid-like there) -- which is what the "Previous run" in "Results so
-   far" used. `ModelConfig.nh_bottleneck` is now `512`, and the "Current
-   run" above was retrained/evaluated at that width (set it back to `256`
-   to match the released code / RL agent instead). Still short of the
-   paper's 25.2%, so this alone doesn't fully close the gap.
-3. **`ego_vel` composition -- three `rot_vel`-based reconstructions tried
-   and rejected; `dtheta` kept.** `scripts/convert_csv_to_shards.py` uses
-   `[speed, sin(dtheta), cos(dtheta)]`, where `dtheta` is the net heading
-   change directly measured between consecutive stored `head_direction`
-   vectors -- not the paper-literal-looking `[v_t, sin(phi_dot_t),
-   cos(phi_dot_t)]` built from the raw CSV `rot_vel` rate, which was tried
-   in three variants (raw, clipped to `+-3*sigma_phi`, rescaled by
-   `COARSE_DT` and clipped to `+-pi`) and failed identically in all three
-   (loss plateaued ~6.96-7.07 instead of `dtheta`'s ~3.5-4.9) -- see "Why
-   `rot_vel` doesn't work for `ego_vel`" above for the root cause (it's a
-   single-instant sample within a 0.15s window, not the window's net
-   change, so no amount of clipping/rescaling fixes it). This was confirmed
-   end to end across from-scratch runs with an otherwise-identical setup
-   (512-unit bottleneck, literal `1e-5` grad clip), and a dedicated check
-   ruled out the dataset reseed as a confound.
-4. **Learning rate at the paper's literal `1e-5`, and `grad_clip_value`
-   reverted to the paper's literal `1e-5` -- confirmed workable.** The
-   "Current run" above trained cleanly at this setting (loss 7.79 -> 3.57,
-   no divergence) and produced a much higher grid-like rate than the
-   earlier loosened-clip run, consistent with (but not rigorous proof of)
-   the clip-as-stabilizer hypothesis in "Training adjustments made" --
-   LSTM weight norms still haven't been tracked *during* a run to confirm
-   they stay bounded, only inferred from the absence of loss blowup.
-5. **Grid-cell significance test now uses the paper's actual per-unit
-   shuffle procedure -- and it lowers the grid-like rate, not raises it.**
-   `scores.py`'s `field_labels`/`shuffle_fields`/
-   `GridScorer.shuffled_gridness_threshold` implement the paper's null
-   distribution (Supplementary Methods 3d): watershed-segment each unit's
-   ratemap into fields, relocate each field's peak to a random bin, refill
-   the rest with the unit's own background level, repeat 100x, take the
-   95th percentile as that unit's own threshold. `evaluate.py
-   --shuffle_threshold` (the default) uses this instead of one fixed cutoff
-   for every unit; `--no-shuffle_threshold` restores the old fast fixed-0.37
-   behavior. See `notebooks/gridness_shuffle_explainer.ipynb` for a worked,
-   visual walkthrough of the whole procedure on a synthetic example.
-   Caveat: DeepMind never released this analysis code, only the paper's
-   prose description -- exact implementation choices this repo had to make
-   on its own (field-boundary convention, how overlapping relocated fields
-   combine, what fills vacated background, and the watershed algorithm
-   itself: a dependency-free steepest-ascent walk rather than
-   `scipy.ndimage.watershed_ift`/skimage) are reasonable but unverified
-   against any original source. Applying it to `checkpoint_epoch299.pt`
-   gives a *stricter* result than the fixed 0.37 (see "Results so far"):
-   bottleneck 39/512 (7.6%) vs. 92/512 (18.0%) with the fixed cutoff -- the
-   per-unit thresholds average ~0.56, well above 0.37, meaning this
-   network's ratemaps can already fake a gridness score above 0.37 just by
-   rearranging their own fields at random. This widens, not narrows, the
-   gap to the paper's 25.2%. **Known unresolved issue (deliberately on
-   hold):** real units' field counts range from 1 to 86 (of 1024 ratemap
-   bins) under the current unsmoothed watershed step -- much wider than the
-   clean synthetic example in `notebooks/gridness_shuffle_explainer.ipynb`
-   -- which likely makes per-unit thresholds for the noisier units
-   unreliable. The fix under consideration is smoothing the ratemap before
-   field segmentation only (not before scoring); not yet implemented, so
-   treat current shuffle-threshold numbers as provisional.
+### Path integration — reproduces the paper
 
-## Data / large files
+Decoded-position error against the true trajectory
+(`results/baseline/path_integration_epoch299.png`):
 
-Not committed to git (see `.gitignore`), all regeneratable:
+| decoder | trained, t=15s | untrained | floor | effect size |
+|---|---|---|---|---|
+| argmax | 17.2cm | 112.0cm | 7.0cm | 2.53 |
+| weighted mean | 25.2cm | 86.8cm | 6.9cm | 2.47 |
+| **top3** | **14.7cm** | **88.8cm** | 6.9cm | **2.87** |
+| *paper* | *16cm* | *91cm* | — | *2.83* |
 
-| path                                        | size                    | regenerate via                     |
-|----------------------------------------------|-------------------------|-------------------------------------|
-| `data/square_room_100steps_2.2m_1000000/`   | ~17GB, 100 CSV files    | `make_dataset.ipynb`               |
-| `data/shards/`                              | ~2.3GB, 100 files       | `scripts/convert_csv_to_shards.py` |
-| `results/`                                  | ~600MB, 151 checkpoints (current `epochs=300`; scales with `TrainConfig.epochs`) | `train.py` |
+**The paper does not say how it decoded position from the place cells**, so
+all three readouts are measured. `top3` matches the paper on all three numbers
+and is what `evaluate.py` selects; `argmax` is 23% off on the untrained
+control. Any claim comparing our error to the paper's 16cm must name the
+decoder.
 
-`eval/` (PDFs + score `.npz` files, a few MB) is small and **not**
-ignored -- kept as evidence of what a given checkpoint actually produced.
+*Floor* is the error left when the **true** position's place-cell code is
+decoded — what a perfect path integrator would still score, since a 256-cell
+code can only name cell centres. It is not in the paper, and it is what makes
+the trained number interpretable: 14.7cm is 7.8cm of network error on top of
+6.9cm of readout resolution, not 14.7cm of network error.
 
-## Roadmap: beyond the supervised path-integration network
+The error curve is more informative than either endpoint: 25.4cm at t=0 (the
+LSTM settling out of its injected initial condition), down to **9.5cm at
+t=1.80s** — 2.6cm above the floor — then drifting up over the remaining 13s.
+Settling transient first, accumulating drift after.
 
-This repo currently reimplements only Banino et al. 2018's **supervised**
-grid-cell network (Fig. 1 / Methods / Supplementary Methods 3a-b). The
-paper's other half -- a vision-based RL agent that reuses this network's
-representations to navigate DeepMind Lab mazes (Fig. 2-4) -- was never
-open-sourced by DeepMind ("the codebase for the deep RL agents makes use
-of proprietary components... unable to publicly release", per the paper).
-Planned next phases, in the order they'd naturally build on each other:
+### Everything about the representation — short, over, or absent
 
-1. **Vision module.** The RL agent doesn't get privileged ground-truth
-   position/head-direction at every step like the supervised network does
-   -- it only gets a first-person visual frame, processed through a CNN
-   into a feature vector (paper's Methods / Extended Data Fig. 2). Needs:
-   confirming the exact CNN architecture the paper specifies (layer count/
-   sizes), and how its output feeds into the rest of the agent.
-2. **Actor-critic policy/value network.** An A3C-style network (Fig. 2a)
-   that takes the vision features (+ this repo's pretrained grid-cell LSTM
-   representations, either frozen or fine-tuned) and outputs an action
-   distribution plus a value estimate, trained via reinforcement learning
-   against a navigation-to-goal reward. Needs: confirming action space
-   (discrete movement/rotation commands), reward shaping, and whether the
-   grid-cell network is frozen or continues training during RL.
-3. **Environment.** The paper trains and evaluates in DeepMind Lab mazes,
-   which are not freely reusable/reproducible here in the same form. Needs
-   a decision on a substitute (a custom simple maze environment, or an
-   open equivalent) that preserves the task structure (visual navigation
-   to a goal in a partially observable maze) closely enough to be a fair
-   comparison.
-4. **Validation.** The paper's headline RL-agent finding is that grid-like
-   periodicity *re-emerges* in the agent's own recurrent units under this
-   setup (Fig. 2d, Extended Data Fig. 6a, 21.4% grid-like at 256 units) --
-   this repo's existing `scores.py`/`evaluate.py` gridness pipeline should
-   carry over directly for checking that once an RL agent exists.
+| measure | ours (256 units) | paper | paper's figure |
+|---|---|---|---|
+| gridness > 0.37, bottleneck | **11 (4.3%)** | 21.9% at 256 | Fig. 1d, ED 3d |
+| gridness > 0.37, raw LSTM | 1 (0.8%) | ~0 | — |
+| head direction > 0.47 | 65 (25.4%) — *see below, not measurable* | 10.2% | Fig. 1f |
+| border score > 0.50 | **5 (2.0%)** | 8.7% | Suppl. eq. 8 |
+| conjunctive (both cutoffs) | 1 (9.1% of grid units) | 14 (11% of 129) | Fig. 1g |
+| grid scale | 80–120cm, mean 107 | 28–115cm, mean 66 | Suppl. 3d |
+| scale clusters (BIC) | 4, ratios 1.10–1.17 | 3, ratios ~1.5 | Fig. 1e |
+| discreteness of scale | p = 0.108 | p < 0.002 | Fig. 1e |
+| stability, 2e5 vs 3e5 | all 0.887 / grid 0.880 / directional 0.815 | grid stable, directional **not** | ED 3b |
 
-None of this is implemented yet -- this section exists to record the
-intended scope before work starts, so later commits build toward it
-incrementally rather than the roadmap being reconstructed after the fact.
+Read this table with three cautions.
+
+**The scale rows are underpowered, not results.** They rest on 10 grid-like
+units against the paper's 129. A mixture model over 10 points has more freedom
+than the data constrains — the BIC curve has no clean minimum — and the shuffle
+test has almost no power. `evaluate.report_scale_clustering` prints a warning
+below 30 scales for exactly this reason.
+
+**But the scale itself is solid, and it is the most concrete lead here.** The
+peak-finding was checked directly against the autocorrelograms: every top unit
+shows the textbook hexagonal signature of six off-centre peaks in three mirror
+pairs (unit 74: 14.8/14.8, 15.6/15.6, 18.0/18.0 bins), with the next peak far
+beyond at 30 bins, so the 20-bin search cap truncates nothing real. Mean 107cm
+is genuine — and in a 2.2m arena that is a lattice with barely two periods
+across it, the lowest spatial frequency that can express hexagonal structure at
+all. Our grid-like units are only the coarsest ones; the paper's 28–70cm
+population is simply absent. Whatever is short here is short specifically at
+high spatial frequency, which is a narrower question than "not enough grid
+cells".
+
+**The annulus inner radius turns out to be a much bigger lever than the earlier
+512-unit sweep suggested, and it's real, not an artefact.** Sweeping it at 256
+units on this same checkpoint (SAC computed once per unit, reused across every
+radius tried):
+
+| inner radius | 1 | 2 | 3 | 4 (default) | 5 | 6 | 7 | 9 | 12 | 15 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| grid-like > 0.37 | 4.3% | 4.3% | 4.3% | 4.3% | 4.7% | 5.5% | 6.6% | 11.7% | 20.7% | 24.6% |
+
+That is a ~5.7× swing, not the ~2× seen at 512 units, and inner=12 bins
+(82.5cm) alone lands within a point of the paper's 21.9%.
+
+Checked against controls before trusting this: ten draws of pure Gaussian
+noise stay flat and low across the same sweep (mean 0.00–0.05, never near
+0.37), while a synthetic hexagonal lattice at our own units' scale (16-bin
+spacing, 110cm) actually *rises* with inner radius (1.30 → 1.99), matching
+what the real units do. So this is not the same failure mode as the
+`grid_scale` SAC edge-artifact found earlier — it reflects something genuine
+about these units' periodicity, not noise inflating a thin ring's correlation.
+
+**Why it moves so much here specifically:** `DEFAULT_INNER_RADIUS_BINS = 4.0`
+was ported as an *absolute bin count* from the released code's `0.2` fraction
+at its own `nbins=20`. Applied literally at our `nbins=32` (the paper's own
+ratemap resolution), `0.2` would give 6.4 bins, not 4 — worth fixing for
+consistency, though the sweep shows that alone only moves 4.3%→6.6%. The much
+larger effect at 9+ bins makes sense given what these units actually are:
+their own grid scale (mean 107cm) is far coarser than the paper's population
+average (66cm), so a fixed inner radius tuned for the paper's mix of scales
+increasingly under-excludes the trivial near-centre autocorrelation falloff
+for a unit whose true wavelength is this much longer — the ring at radius 4
+is measuring too close to centre relative to *this* unit's own periodicity.
+
+**Why this is not "the gap is closed."** Inner=12 was found by sweeping until
+the count approached the paper's number, using the very network the number is
+meant to validate — adopting it as the new default would be tuning the ruler
+to the answer. There is no independent principle here for what the "right"
+inner radius is (the paper never states one), so the honest update is not "the
+network makes 21.9% grid cells after all" but **"confidence in the 4.3–10.2%
+shortfall being real is now lower than it was"** — the measurement has enough
+free-parameter room, at this population's scale specifically, to swing between
+"clearly short" and "matches the paper" depending on a choice nobody has
+justified. `evaluate.report_gridness` still uses the inner=4 default; changing
+it needs a principled reason, not a fit to this outcome.
+
+**Checked, and ruled out: a hidden fine-scale population just below the
+cutoff.** If the 0.37 threshold were hiding real but weaker fine-scale grid
+cells, units just under it should trend toward *smaller* measured scale as
+gridness rises toward the cutoff. It doesn't happen: near-miss units
+(gridness 0.20–0.37, the 11 with a measurable scale) average 97cm — same
+neighbourhood as the confirmed grid cells (107cm) — and every band down to
+gridness < 0 sits at the same ~96–100cm. Whatever periodicity these low-scoring
+units carry is the same coarse flavour as the units that clear the cutoff, not
+a finer one waiting to be found. This is independent of the annulus question
+above: it rules out the threshold as the explanation, while the annulus
+finding questions the scoring parameter instead.
+
+**The head-direction row should not be read as a disagreement.** That measure
+turns out not to be recoverable from a linear layer at all: the non-negativity
+shift it requires collapses a cosine tuning curve to r̄ = ½ regardless of how
+weak the modulation is, which is above the 0.47 cutoff, and the choice of
+convention alone moves the answer across 0–71%. Known gaps 3 has the algebra
+and the measurements. The border and gridness rows carry no such problem —
+both rest on quantities that survive an affine shift, or on a ratio whose
+convention was checked not to invert.
+
+**The stability dissociation does not reproduce.** The paper's finding is that
+grid-like units hold their map across training while directionally modulated
+ones do not. Here everything is stable (0.82–0.89) and the two groups barely
+separate. A population that stable at 2e5 steps is one that stopped changing
+early, which fits the loss curve flattening after ~epoch 150.
+
+### The dropout ablation: no effect either way
+
+The paper's claim (Extended Data Fig. 4) is that grid-like units *do not emerge*
+without regularization. Six runs — seeds 0, 1, 2 crossed with `dropout_rates`
+0.5 and 0.0, everything else identical, all scored on the same evaluation
+trajectories (`results/nodropout/dropout_ablation_epoch299.png` shows the seed-0
+pair):
+
+| dropout | seed 0 | seed 1 | seed 2 | mean | s.d. | grid scale |
+|---|---|---|---|---|---|---|
+| 0.5 | 4.3% | 6.6% | 7.4% | **6.1%** | 1.6 | 102cm |
+| 0.0 | 10.2% | 5.1% | 6.2% | **7.2%** | 2.7 | 88cm |
+
+**No detectable effect.** The 1.1-point gap is effect size 0.47 on n=3 per
+group — nothing. Removing dropout does lower the training loss as it should
+(2.9–3.0 vs 3.7) without changing gridness, so the regularizer is doing
+something; just not this.
+
+> An earlier version of this section reported the seed-0 pair alone (4.3% vs
+> 10.2%) as contradicting the paper. That was a single-seed artefact: 10.2% is
+> the highest of all six runs, and the replication removes it. The claim is
+> withdrawn.
+
+Two things the sweep does establish, both firmer than anything a single run
+could say:
+
+**Our run-to-run s.d. is ~2.7 points, against the paper's 2.8 across 100
+retrainings.** The noise level matches, so the setup is not unusually unstable —
+and no single-run difference smaller than about 5 points means anything here.
+The earlier 5.9-vs-7.2 clip/decay-scope comparison is retroactively confirmed as
+noise.
+
+**Under the default scoring, the shortfall is systematic across seeds, and the
+scale finding is robust regardless of scoring.** All six runs land in
+4.3–10.2% (mean 6.6%) against the paper's 21.9% at this width — far outside
+seed noise, though (see above) the annulus question means the true magnitude
+of that shortfall is now uncertain, not the fact that it's consistent across
+seeds. Every one of the six has a mean grid scale of 84–107cm,
+never near the paper's 66cm, while individual clean grid cells do form (best
+unit reaches 1.07). So the network reliably produces *a few, very coarse* grid
+cells rather than *many at several scales*. That is a sharper target than "too
+few grid cells", and it is what the next hypothesis has to explain.
+
+**What the path-integration result rules out.** The shortfall is not a failed
+task: the network solves path integration to within 8% of the paper's own
+figures, with a *better* effect size. It performs the same computation and
+represents it differently, so the open question is what selects the
+representation — and with the dropout hypothesis refuted, there is no current
+candidate.
+
+An earlier observation, still standing: the LSTM being unclipped under the
+paper's scope did **not** destabilise training (weakening the idea that the
+tiny `1e-5` clip acts as an implicit stabiliser — though loss not exploding is
+weaker evidence than bounded weights, which have never been tracked).
+
+## Known gaps
+
+Ranked by how likely each is to matter.
+
+1. **The gridness shortfall's evidential status just weakened.** See Results,
+   "Everything about the representation," for the full annulus sensitivity
+   sweep and the ruled-out hidden-fine-population check — in short, confidence
+   that 4.3–10.2% reflects the network's true periodicity, rather than an
+   unlucky scoring choice, is now lower, not fixed. Untried: the place-cell
+   scale `pc_scale` (sets the spatial frequency of the *targets*, though
+   already far finer than the observed grid scale, so its leverage here is
+   uncertain); the circular arena, the paper's actual 256-unit condition; and
+   a principled way to pin down the inner radius (e.g. per-unit, from each
+   map's own central-peak width) rather than one global guess.
+2. **Multi-seed statistics: 3 seeds, not the paper's 100.** `TrainConfig.seed`
+   fixes weight init and batch order, and the dropout sweep above ran 3 seeds
+   per configuration — enough to measure the noise floor (s.d. ~2.7 points,
+   matching the paper's 2.8 across 100 retrainings) but not enough to resolve
+   anything smaller than ~5 points. Any future single-run comparison should be
+   read against that floor; the checkpoints are under
+   `data/checkpoints/seed{1,2}_dropout{0.5,0.0}/`.
+3. **Head-direction tuning is implemented but not measurable on this layer.**
+   It reports 65/256 (25.4%) above the paper's 0.47 against its 10.2%, and
+   26.6% on the superseded 512-unit run — but that difference should not be
+   read as a result, for the reason below. The resultant-vector formula
+   (Suppl. eqs. 6–7) assumes non-negative firing rates, but the bottleneck is
+   a plain linear layer with signed activations, so each unit's tuning is
+   shifted by its own minimum first — without that the measure is not even in
+   [0,1] (a signed total passes through zero; mean length comes out at 32.9).
+   The paper analysed linear-layer units too and never says how it handled this.
+   The shift is `resultant_vector_length(..., shift_to_nonnegative=)`.
+
+   **The shift IS the cause of the gap, and the measure is not trustworthy on
+   a linear layer.** Two facts, both verified numerically against this run:
+
+   *The shift destroys exactly the quantity being measured.* For a tuning curve
+   `β = A·cos(α−φ) + B`, min-shifting gives `A·(1 + cos(α−φ))`, whose resultant
+   is `A·n/2 ÷ A·n = ½` — **independent of both A and B**. Measured: r̄ = 0.506
+   for every amplitude from 0.001 to 50 and every baseline from 0 to 1000. The
+   same curves unshifted give 0.0001 … 0.49, tracking modulation depth as they
+   should. The measure works by comparing modulation against baseline, and the
+   min-shift deletes the baseline. Since 0.506 > 0.47, **any** unit with even a
+   faintly cosine-shaped directional component is counted as tuned.
+
+   That is visible in the data: 72 of 256 units sit in r̄ ∈ [0.42, 0.52], piled
+   against the cutoff. Adding just 3.7% of the mean tuning span as a constant
+   moves the count from 25.4% to exactly the paper's 10.2%, and 9.1% of the
+   span drives it to 0.4%.
+
+   *The convention alone spans the whole range.* Per-unit min → 25.4%,
+   population-wide min → 0.0%, half-wave rectification → 71.1%. The paper's
+   10.2% lies inside that interval. So our "overshoot" is not evidence that
+   this network is more directional than the paper's; it is evidence that the
+   number is set by an unstated convention.
+
+   An earlier note here claimed the min-shift was the *most conservative*
+   baseline and so could not inflate the count. That compared it against
+   half-wave rectification and against no shift at all. Against the case that
+   matters — a firing rate with its own positive baseline — min-shift is the
+   **most liberal** constant shift, because it is the smallest constant that
+   still clears zero, and r̄ falls monotonically in that constant.
+
+   Any fix has to restore a baseline the linear layer does not have. Until one
+   is justified rather than picked, the honest reading of this row is "not
+   measurable here", not "25.4% vs 10.2%".
+
+   Related: the 0.47 cutoff is the Rayleigh critical value at **n = 20**
+   (0.4720 at α = 0.01, against 0.4966 at n = 18 and 0.4507 at n = 22), so the
+   paper treated its 20 angular bins as the 20 observations. Changing
+   `scores.HD_BINS` invalidates the threshold.
+4. **Two ambiguities inherited from the paper's own text**, both in
+   Supplementary Methods 3d and both resolved here by a documented choice
+   rather than by guessing at the paper's:
+   - *The discreteness histogram range.* The paper fixes it at "scales 10 to 36
+     spatial bins". That does not reconcile with its own reported 28–115cm at
+     any bin width: its shuffle jitter of ±7 bins is half the smallest scale,
+     putting that scale at 14 bins = 28cm and so a bin at 2cm — under which the
+     stated top of the range, 36 bins = 72cm, falls short of the reported
+     maximum of 115cm. `scores.discreteness` works in metres and lets each
+     histogram span its own data instead.
+   - *The annulus inner radius*, as above.
+5. **Square environment only.** The paper also validates a 2.2m-diameter
+   circular arena (Extended Data Fig. 3d, 21.9%).
+6. **`ego_vel` composition is a reconstruction**, not a confirmed fact —
+   DeepMind never published it.
+7. **`parameter_updates` ambiguity.** Table 1 states 300,000; the released
+   flag defaults imply 1,000,000. We use 300,000.
+8. **The bottleneck bias is the paper's, and untested.** Methods: *"The linear
+   decoder consists of three sets of weights **and biases**. The first set …
+   map from the LSTM hidden state m⃗ₜ to the linear layer activations
+   g⃗ₜ ∈ ℝ⁵¹²."* `ModelConfig.bottleneck_has_bias = True` follows that; the
+   released code has no bias here. Set it `False` for the released code's
+   behaviour. No run has compared the two. Note this is the mirror of
+   deliberate difference 3 above: the paper omits a bias the code has in the
+   LSTM init, and specifies one the code lacks in the bottleneck.
+
+## Roadmap: beyond the supervised network
+
+The paper's other half — a vision-based RL agent reusing these
+representations to navigate DeepMind Lab mazes (Fig. 2–4) — was never
+open-sourced ("the codebase for the deep RL agents makes use of proprietary
+components"). Planned, in build order:
+
+1. **Vision module** — CNN over 64×64 RGB (Supplementary 3b: four conv
+   layers, 16/32/64/128 filters, 5×5, stride 2, pad 2, ReLU, then FC-256).
+2. **Actor–critic policy** — A3C-style, taking vision features plus this
+   network's representations, six discrete actions.
+3. **Environment** — DeepMind Lab is not reproducible here; needs a
+   substitute preserving the task structure.
+4. **Validation** — the paper's finding is that grid-like periodicity
+   *re-emerges* in the agent's own units (21.4% at 256 units); the existing
+   `scores.py` pipeline carries over directly.
