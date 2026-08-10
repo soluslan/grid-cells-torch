@@ -1,13 +1,19 @@
-# Large generated datasets -- regenerate via make_dataset.ipynb
-square_room_100steps_2.2m_1000000/
+# data/ holds everything large and regenerable. Each subfolder is listed
+# individually rather than ignoring data/ wholesale, so that the list itself
+# documents what belongs there -- and so anything small dropped directly in
+# data/ (a note, a manifest) still gets tracked. Add a line here when a new
+# large artefact appears; see README "Where things live".
 
-# Large converted training shards -- regenerate via scripts/convert_csv_to_shards.py
+# Trajectory CSVs (~17GB) -- regenerate via notebooks/00_make_dataset.ipynb
+data/square_room_100steps_2.2m_1000000/
+
+# Converted training shards (~2.3GB) -- regenerate via notebooks/01_prepare_data.ipynb
 data/shards/
 
-# Training checkpoints (500 files, ~1.4GB) -- regenerate via train.py.
-# Keep specific checkpoints worth sharing by copying them into eval/
-# instead (that folder is NOT ignored -- see below).
-results/
+# Model weights (~62MB per run) -- regenerate via notebooks/02_train.ipynb
+data/checkpoints/
+
+# results/ is the opposite: small, kept, and tracked. Figures only.
 
 # Run logs
 *.log
@@ -22,3 +28,6 @@ __pycache__/
 
 # OS
 .DS_Store
+
+# Editor config -- recommends an extension, not needed to run anything
+.vscode/

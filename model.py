@@ -1,23 +1,11 @@
 """Grid cell supervised-learning model.
 
-Ported from google-deepmind/grid-cells' model.py (a custom snt.RNNCore
-unrolled via tf.nn.dynamic_rnn) to a plain nn.Module using nn.LSTM. Because
-nn.LSTM natively processes a whole [B,T,*] sequence and nn.Linear natively
-broadcasts over leading dimensions, the custom per-step RNNCore machinery the
-original needed (Sonnet v1's static-graph model required the per-step Linear
-layers to live *inside* the unrolled cell) collapses into a much simpler
-"LSTM over the whole sequence, then Linear layers applied to the whole
-sequence at once" design. This is an intentional simplification, not a
-functional difference.
-
-Two known dead-code items from the original are NOT carried over:
-  - `nh_embed`: stored but never used to build an embedding layer in the
-    original _build(); dropped entirely here.
-  - weight decay is *actually* wired into training here (see train.py's
-    optimizer param groups) since the original registered Sonnet
-    `regularizers` on the bottleneck/output-head weights but never summed
-    them into the optimized loss anywhere in train.py -- i.e. weight decay
-    was a no-op in the original as published.
+Ports google-deepmind/grid-cells' model.py (a custom snt.RNNCore unrolled by
+tf.nn.dynamic_rnn) to a plain nn.Module. Because nn.LSTM consumes a whole
+[B,T,*] sequence and nn.Linear broadcasts over leading dimensions, the
+original's per-step cell machinery collapses into "LSTM over the sequence,
+then Linear layers over the sequence" -- a simplification, not a functional
+difference. The original's unused `nh_embed` is dropped.
 """
 
 from dataclasses import dataclass
@@ -37,8 +25,8 @@ class ModelOutput:
 
 
 def _trunc_normal_init(weight: torch.Tensor, displace: float = 0.0) -> None:
-    """Matches the original's displaced_linear_initializer: truncated normal
-    with mean=displace*stddev, stddev=1/sqrt(fan_in), truncated at 2 stddev."""
+    """The original's displaced_linear_initializer: truncated normal, mean
+    displace*stddev, stddev 1/sqrt(fan_in), truncated at 2 stddev."""
     fan_in = weight.shape[1]
     std = 1.0 / (fan_in ** 0.5)
     mean = displace * std
@@ -52,7 +40,7 @@ class GridCellsRNN(nn.Module):
         self,
         target_ensembles: list[CellEnsemble],
         nh_lstm: int = 128,
-        nh_bottleneck: int = 256,
+        nh_bottleneck: int = 512,
         dropout_rates: tuple = (0.5,),
         bottleneck_has_bias: bool = False,
         init_weight_disp: float = 0.0,
@@ -68,6 +56,8 @@ class GridCellsRNN(nn.Module):
 
         n_init_in = sum(ens.n_cells for ens in target_ensembles)
         self.lstm = nn.LSTM(ego_vel_dim, nh_lstm, batch_first=True)
+        # state_init/cell_init have a learned bias, as in the original -- the
+        # paper's Extended Data Fig. 1 equations show none. See README.
         self.state_init = nn.Linear(n_init_in, nh_lstm)
         self.cell_init = nn.Linear(n_init_in, nh_lstm)
         self.bottleneck = nn.Linear(nh_lstm, nh_bottleneck, bias=bottleneck_has_bias)
@@ -77,11 +67,8 @@ class GridCellsRNN(nn.Module):
         self._init_weights(init_weight_disp)
 
     def _init_weights(self, init_weight_disp: float) -> None:
-        # Output heads (pc_logits equivalent) use the original's displaced
-        # truncated-normal initializer. bottleneck/state_init/cell_init had no
-        # custom initializer in the original (Sonnet v1's own default, itself
-        # a truncated-normal with std=1/sqrt(fan_in) -- i.e. the same family
-        # at displace=0), so the same helper is applied uniformly here.
+        # Only the output heads had a custom initializer in the original; the
+        # rest used Sonnet v1's default, the same family at displace=0.
         for head in self.output_heads:
             _trunc_normal_init(head.weight, displace=init_weight_disp)
             nn.init.zeros_(head.bias)
@@ -90,19 +77,18 @@ class GridCellsRNN(nn.Module):
             if layer.bias is not None:
                 nn.init.zeros_(layer.bias)
 
+        # snt.LSTM adds a constant forget_bias=1.0 that nn.LSTM has no
+        # equivalent for. Biases are laid out [input, forget, cell, output],
+        # so add it to the forget block of one of the two bias vectors.
+        with torch.no_grad():
+            h = self.nh_lstm
+            self.lstm.bias_hh_l0[h:2 * h] += 1.0
+
     def forward(self, init_conds: list[torch.Tensor], vels: torch.Tensor) -> ModelOutput:
-        """
-        Args:
-            init_conds: one [B, ens.n_cells] tensor per target ensemble (t=0
-                encoding, from encode_initial_conditions()).
-            vels: [B, T, ego_vel_dim] egocentric velocity input.
-        Returns:
-            ModelOutput with per-ensemble logits, bottleneck, and lstm output,
-            all with a leading [B,T,...] shape.
-        """
-        concat_init = torch.cat(init_conds, dim=1)  # [B, n_init_in]
+        """init_conds: one [B, n_cells] per ensemble; vels: [B,T,ego_vel_dim]."""
+        concat_init = torch.cat(init_conds, dim=1)
         h0 = self.state_init(concat_init).unsqueeze(0)  # [1,B,nh_lstm]
-        c0 = self.cell_init(concat_init).unsqueeze(0)  # [1,B,nh_lstm]
+        c0 = self.cell_init(concat_init).unsqueeze(0)
 
         lstm_out, _ = self.lstm(vels, (h0, c0))  # [B,T,nh_lstm]
         bottleneck = self.bottleneck(lstm_out)  # [B,T,nh_bottleneck]
@@ -113,17 +99,42 @@ class GridCellsRNN(nn.Module):
                 [F.dropout(c, p=r, training=True) for c, r in zip(chunks, self.dropout_rates)],
                 dim=-1)
 
-        logits = [head(bottleneck) for head in self.output_heads]
-        return ModelOutput(logits=logits, bottleneck=bottleneck, lstm_output=lstm_out)
+        return ModelOutput(logits=[head(bottleneck) for head in self.output_heads],
+                           bottleneck=bottleneck, lstm_output=lstm_out)
 
-    def decay_parameters(self) -> list[torch.nn.Parameter]:
-        """Weights that should receive L2 weight decay: bottleneck + output
-        head *weights* only (never biases) -- matches the original's
-        Sonnet `regularizers={"w": ...}`, which only ever targeted "w"."""
-        params = [self.bottleneck.weight]
-        params += [head.weight for head in self.output_heads]
+    def decay_parameters(self, scope: str = "output_heads") -> list[torch.nn.Parameter]:
+        """Weights receiving L2 decay -- always weights, never biases, per the
+        paper ("the *weights* projecting from the dropout layer, g_t, to [...]
+        y_t and z_t") and the original's `regularizers={"w": ...}`.
+
+        "output_heads" is that sentence read literally. "bottleneck_and_heads"
+        also decays the LSTM->g bottleneck, as the original registered.
+        """
+        if scope not in ("output_heads", "bottleneck_and_heads"):
+            raise ValueError(f"unknown weight decay scope {scope!r}")
+        params = [head.weight for head in self.output_heads]
+        if scope == "bottleneck_and_heads":
+            params = [self.bottleneck.weight] + params
         return params
 
-    def no_decay_parameters(self) -> list[torch.nn.Parameter]:
-        decay_ids = {id(p) for p in self.decay_parameters()}
+    def no_decay_parameters(self, scope: str = "output_heads") -> list[torch.nn.Parameter]:
+        decay_ids = {id(p) for p in self.decay_parameters(scope)}
         return [p for p in self.parameters() if id(p) not in decay_ids]
+
+    def clip_parameters(self, scope: str = "output_heads") -> list[torch.nn.Parameter]:
+        """Parameters that gradient clipping applies to.
+
+        "output_heads" is the paper's Methods read literally ("parameters
+        projecting from the dropout layer, g_t, to [...] y_t and z_t"), so the
+        LSTM and bottleneck go unclipped. "bottleneck_and_heads" matches the
+        original's unused `clip_bottleneck_gradient`; "all" matches its actual
+        default, `clip_all_gradients`.
+        """
+        if scope == "all":
+            return list(self.parameters())
+        if scope not in ("output_heads", "bottleneck_and_heads"):
+            raise ValueError(f"unknown grad clip scope {scope!r}")
+        params = [p for head in self.output_heads for p in head.parameters()]
+        if scope == "bottleneck_and_heads":
+            params += list(self.bottleneck.parameters())
+        return params
