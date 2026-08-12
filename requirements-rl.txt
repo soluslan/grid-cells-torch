@@ -1,0 +1,12 @@
+# Deep-RL agent phase (Roadmap section in README.md), on top of the supervised
+# model's requirements.
+-r requirements.txt
+
+dm_env==1.6
+six==1.17.0
+Pillow==12.3.0
+
+# deepmind-lab itself is deliberately NOT listed here -- it isn't published on
+# PyPI. It's built locally from the `lab/` git submodule and installed as a
+# wheel by notebooks/06_setup_rl_environment.ipynb, which must be run once
+# before any RL code will import it.

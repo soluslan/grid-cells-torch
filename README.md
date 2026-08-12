@@ -519,8 +519,37 @@ components"). Planned, in build order:
    layers, 16/32/64/128 filters, 5×5, stride 2, pad 2, ReLU, then FC-256).
 2. **Actor–critic policy** — A3C-style, taking vision features plus this
    network's representations, six discrete actions.
-3. **Environment** — DeepMind Lab is not reproducible here; needs a
-   substitute preserving the task structure.
+3. **Environment** — DeepMind Lab (`lab/`, a git submodule) is buildable
+   here; see "RL environment setup" below. Fig. 2's open-field task is
+   reproducible via `random_goal_factory.lua`; the goal-driven/goal-doors
+   multi-room environments (Fig. 3) have no public source and need to be
+   reconstructed from the Methods description.
 4. **Validation** — the paper's finding is that grid-like periodicity
    *re-emerges* in the agent's own units (21.4% at 256 units); the existing
    `scores.py` pipeline carries over directly.
+
+### RL environment setup
+
+DeepMind Lab targets a 2018-era toolchain and doesn't build out of the box on
+a modern machine. It's included as the `lab/` git submodule (pinned to a
+specific upstream commit, unmodified — no fork needed) rather than copied in:
+its own asset-packaging step bundles its entire ~2.4GB `assets/` tree
+regardless of which level is actually used, and `engine/`/`q3map2/`/
+`assets_oa/` are GPL-licensed, so copying that content into this repository
+would both bloat every future clone and risk entangling this project's
+license with the GPL.
+
+```
+git clone --recurse-submodules <this repo>
+# or, after a plain clone:
+git submodule update --init
+```
+
+Then, once (before touching any RL code):
+
+1. `pip install -r requirements-rl.txt`
+2. Run `notebooks/06_setup_rl_environment.ipynb` top to bottom. It applies
+   the handful of small patches this toolchain needs directly (Bazel version
+   pin, a couple of dependency-version swaps, one Python-3.12+ compatibility
+   fix), builds `lab/` with Bazel, and installs the result as a
+   `deepmind_lab` wheel — importable alongside `torch` in the same process.
