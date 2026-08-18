@@ -139,7 +139,12 @@ class RLConfig:
     # pipeline (see README "Where things live") -- data/ is gitignored/regenerable, results/
     # tracked. A fresh checkpoint file is written here every checkpoint_every_env_steps.
     results_dir: str = "data/checkpoints/rl_baseline"
-    checkpoint_every_env_steps: int = 50_000
+    # A real checkpoint (vision+grid+actor-critic) measures 11.85MB. At the paper's 1e9-step
+    # budget, the old 50_000 default would write 1e9/50_000 = 20,000 unique files (~237GB) --
+    # noticed while explaining what training produces, before ever launching the real run.
+    # 500_000 gives 2,000 files (~24GB) and, at the ~548 steps/sec measured for 32 actors, still
+    # lands roughly every 15 minutes -- frequent enough to resume from, far less disk churn.
+    checkpoint_every_env_steps: int = 500_000
     log_every_n_updates: int = 20  # how often actor/learner processes append a log line
 
 
