@@ -63,7 +63,89 @@ class TrainConfig:
 
 
 @dataclass
+class RLEnvConfig:
+    """DeepMind Lab environment settings for the RL-agent phase (roadmap plan M1/M4).
+
+    `grid_size`/`env_size_m`/`wall_world_units` must match the level script actually loaded
+    (`rl/levels/square_arena.lua`'s GRID/wall geometry) -- coupled by construction, not derived
+    automatically, since a level file and its Python-side config live in different languages.
+    """
+    level: str = "square_arena"
+    level_directory: str = "rl/levels"  # relative to grid-cells-torch/, matching rl_train.py's cwd
+    width: int = 64
+    height: int = 64
+    grid_size: int = 10
+    env_size_m: float = 2.5
+    # world-unit span of the interior (see square_arena.lua's cellOrigin: cell c -> c*100+50,
+    # interior cells 1..grid_size, wall at c=0/grid_size+1 -> world units [100, 100+grid_size*100]).
+    wall_world_units: tuple = (100.0, 1100.0)
+    action_repeat: int = 4
+    num_actors: int = 32
+
+
+@dataclass
+class VisionRLConfig:
+    embed_dim: int = 256
+    mask_prob: float = 0.95
+    learning_rate: float = 1e-4  # not paper-specified; Adam default order of magnitude
+    minibatch_size: int = 32  # Methods: vision learner minibatch of 32 single frames
+
+
+@dataclass
+class GridRLConfig:
+    minibatch_size: int = 10  # Methods: grid learner minibatch of 10 sequences
+    seq_len: int = 100
+    learning_rate: float = 1e-3  # Supplementary Table 2: "Learning rate grid network"
+
+
+@dataclass
+class ActorCriticConfig:
+    lstm_units: int = 256
+    embed_dim: int = 256
+    learning_rate_range: tuple = (0.000001, 0.0002)  # Supplementary Table 2
+    gradient_momentum: float = 0.99  # Supplementary Table 2
+    discount: float = 0.99
+    entropy_reg_range: tuple = (0.00006, 0.0001)  # Supplementary Table 2, beta
+    baseline_cost_range: tuple = (0.48, 0.52)  # Supplementary Table 2, alpha
+    # Supplementary Table 2: "Back-propagation step in the actor-critic learner" = 100. Was 20
+    # here (documented then as "not paper-specified exactly, standard A3C t_max order of
+    # magnitude") -- that was wrong; the paper does specify it, found on a full re-read of Table
+    # 2. See the RL-agent roadmap plan's throughput/spec-audit notes.
+    n_step: int = 100
+
+
+@dataclass
+class ReplayBufferConfig:
+    frame_capacity: int = 200_000
+    sequence_capacity: int = 50_000
+
+
+@dataclass
+class RLConfig:
+    env: RLEnvConfig = field(default_factory=RLEnvConfig)
+    vision: VisionRLConfig = field(default_factory=VisionRLConfig)
+    grid: GridRLConfig = field(default_factory=GridRLConfig)
+    actor_critic: ActorCriticConfig = field(default_factory=ActorCriticConfig)
+    replay: ReplayBufferConfig = field(default_factory=ReplayBufferConfig)
+    # Supplementary Table 2: "Place cell scale" = 40, listed separately from Table 1's
+    # sigma(c)=0.01 (meters, explicitly labelled) for the supervised network. Table 2 doesn't
+    # restate units; 40 metres is impossible in this 2.5m arena (env.env_size_m), so read as
+    # 40cm=0.4m -- a documented judgment call, not a value the paper states directly. Used by
+    # ensembles.build_rl_ensembles(), not the supervised build_ensembles()/cfg.task.pc_scale.
+    pc_scale: tuple = (0.4,)
+    total_env_steps: int = 1_000_000_000  # Methods: 1e9 per experiment; smoke-test with far fewer
+    seed: int = 0
+    # Paired with results/<name>/ the same way TrainConfig.results_dir is for the supervised
+    # pipeline (see README "Where things live") -- data/ is gitignored/regenerable, results/
+    # tracked. A fresh checkpoint file is written here every checkpoint_every_env_steps.
+    results_dir: str = "data/checkpoints/rl_baseline"
+    checkpoint_every_env_steps: int = 50_000
+    log_every_n_updates: int = 20  # how often actor/learner processes append a log line
+
+
+@dataclass
 class Config:
     task: TaskConfig = field(default_factory=TaskConfig)
     model: ModelConfig = field(default_factory=ModelConfig)
     train: TrainConfig = field(default_factory=TrainConfig)
+    rl: RLConfig = field(default_factory=RLConfig)

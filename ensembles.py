@@ -105,6 +105,29 @@ def build_ensembles(cfg, device):
     return place, head
 
 
+def build_rl_ensembles(cfg, device):
+    """-> (place_cell_ensembles, head_direction_ensembles) for the RL agent.
+
+    Not build_ensembles(cfg, device): that function reads cfg.task.env_size (2.2m, the
+    supervised pipeline's arena) and cfg.task.pc_scale (0.01m, Supplementary Table 1's sigma(c))
+    unconditionally. The RL square arena is 2.5m (cfg.rl.env.env_size_m), and Supplementary
+    Table 2 gives the RL agent its own place-cell scale, cfg.rl.pc_scale (see config.py's
+    comment there for the unit judgment call) -- both differ from the supervised values, so
+    reusing build_ensembles() here would place 256 1cm-wide fields across a 2.2m span while the
+    agent can reach 1.25m from centre, and would use the wrong field width throughout. M, the
+    head-direction count, and its concentration parameter are unchanged between Table 1 and
+    Table 2, so those still come from cfg.task.
+    """
+    half = cfg.rl.env.env_size_m / 2.0
+    place = [PlaceCellEnsemble(n, stdev=s, pos_min=-half, pos_max=half,
+                               seed=cfg.task.neurons_seed).to(device)
+             for n, s in zip(cfg.task.n_pc, cfg.rl.pc_scale)]
+    head = [HeadDirectionCellEnsemble(n, concentration=c,
+                                      seed=cfg.task.neurons_seed).to(device)
+            for n, c in zip(cfg.task.n_hdc, cfg.task.hdc_concentration)]
+    return place, head
+
+
 def encode_initial_conditions(init_pos, init_hd, place_ensembles, hd_ensembles):
     """init_pos [B,2], init_hd [B,1] -> list of [B, n_cells]."""
     return ([e.posterior(init_pos.unsqueeze(1)).squeeze(1) for e in place_ensembles]

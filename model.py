@@ -84,11 +84,62 @@ class GridCellsRNN(nn.Module):
             h = self.nh_lstm
             self.lstm.bias_hh_l0[h:2 * h] += 1.0
 
-    def forward(self, init_conds: list[torch.Tensor], vels: torch.Tensor) -> ModelOutput:
-        """init_conds: one [B, n_cells] per ensemble; vels: [B,T,ego_vel_dim]."""
+    def init_hidden(self, init_conds: list[torch.Tensor]) -> tuple[torch.Tensor, torch.Tensor]:
+        """init_conds: one [B, n_cells] per target ensemble -> (h0, c0), each [1,B,nh_lstm].
+
+        Factored out of forward() so the RL agent's online inference path (step(), below)
+        can reuse the exact same state_init/cell_init weights via
+        init_hidden_from_predictions() -- see the RL-agent roadmap plan (M3). Same
+        computation regardless of caller; only the source of init_conds differs.
+        """
         concat_init = torch.cat(init_conds, dim=1)
         h0 = self.state_init(concat_init).unsqueeze(0)  # [1,B,nh_lstm]
         c0 = self.cell_init(concat_init).unsqueeze(0)
+        return h0, c0
+
+    def init_hidden_from_predictions(
+        self, predictions: list[torch.Tensor]
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """RL-agent entry point (roadmap plan M3): identical to init_hidden(), renamed for the
+        caller's clarity. `predictions` are the vision module's masked place/head-direction
+        predictions (vision.VisionModule's output), not the ground-truth-encoded values
+        encode_initial_conditions() supplies in the supervised setting -- but they live in the
+        same place/HD-cell-activity space init_hidden()'s layers already expect, so no new
+        layer is needed, only a new source for the input. Call once at episode start and again
+        at every teleport (e.g. after the agent reaches the goal) -- unlike the supervised
+        setting's single call per trajectory, RL episodes reset this hidden state repeatedly.
+        """
+        return self.init_hidden(predictions)
+
+    def step(
+        self, vel_t: torch.Tensor, hidden: tuple[torch.Tensor, torch.Tensor]
+    ) -> tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor]]:
+        """Online, per-timestep inference for the RL agent (roadmap plan M3).
+
+        forward() consumes a whole recorded [B,T,*] trajectory at once, which the supervised
+        setting can do because its training data is a complete stored trajectory. The RL agent
+        can't: it must pick an action before the next observation exists, so the grid network
+        has to process one timestep at a time, with the caller threading `hidden` across calls
+        and only re-initializing it (via init_hidden_from_predictions()) at episode start or a
+        teleport, not once per trajectory. Same self.lstm/self.bottleneck weights as forward()
+        -- no new parameters.
+
+        vel_t: [B, ego_vel_dim], one timestep (no T dimension).
+        hidden: (h, c) from init_hidden_from_predictions(), or the previous step()'s returned
+            hidden otherwise.
+        -> (bottleneck [B, nh_bottleneck], next hidden). No output_heads/logits here: actor
+            processes only need the grid code (bottleneck) to feed the actor-critic, always
+            under no_grad() per the roadmap's "Engineering design" note; call forward() (from
+            the separate grid-network training thread) when place/HD logits are needed. No
+            dropout either, for the same reason -- step() is an inference-only path.
+        """
+        lstm_out, hidden = self.lstm(vel_t.unsqueeze(1), hidden)  # [B,1,nh_lstm]
+        bottleneck = self.bottleneck(lstm_out.squeeze(1))  # [B,nh_bottleneck]
+        return bottleneck, hidden
+
+    def forward(self, init_conds: list[torch.Tensor], vels: torch.Tensor) -> ModelOutput:
+        """init_conds: one [B, n_cells] per ensemble; vels: [B,T,ego_vel_dim]."""
+        h0, c0 = self.init_hidden(init_conds)
 
         lstm_out, _ = self.lstm(vels, (h0, c0))  # [B,T,nh_lstm]
         bottleneck = self.bottleneck(lstm_out)  # [B,T,nh_bottleneck]
