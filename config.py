@@ -146,6 +146,11 @@ class RLConfig:
     # lands roughly every 15 minutes -- frequent enough to resume from, far less disk churn.
     checkpoint_every_env_steps: int = 500_000
     log_every_n_updates: int = 20  # how often actor/learner processes append a log line
+    # Path to a checkpoint*.pt (must include optimizer state, i.e. saved by the resume-aware
+    # _save_checkpoint) to resume from -- None starts fresh. See rl_train.build_shared_models()
+    # and the roadmap plan's "체크포인트 리줌 + 데스크탑 이전" section for the load-order hazard
+    # this exists to get right (must load_state_dict() before share_memory(), never after).
+    resume_from: str | None = None
 
 
 @dataclass

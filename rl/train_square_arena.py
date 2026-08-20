@@ -11,6 +11,7 @@ own internal thread pools, which torch's own API doesn't fully control on all ba
 RL-agent roadmap plan's "Throughput fix" section.
 
 Run from grid-cells-torch/: python rl/train_square_arena.py
+To resume a stopped run: python rl/train_square_arena.py --resume-from data/checkpoints/rl_baseline/checkpoint_step{N}_final.pt
 """
 import os
 
@@ -18,6 +19,7 @@ os.environ.setdefault("OMP_NUM_THREADS", "1")
 os.environ.setdefault("MKL_NUM_THREADS", "1")
 os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 
+import argparse
 import sys
 
 sys.path.insert(0, ".")
@@ -26,6 +28,14 @@ from config import Config
 from rl_train import train_rl_agent
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--resume-from", default=None,
+                         help="checkpoint*.pt path to resume from (must include optimizer "
+                              "state, i.e. saved by this codebase's checkpoint_worker); "
+                              "omit to start fresh at step 0")
+    args = parser.parse_args()
+
     cfg = Config()  # defaults: num_actors=32, total_env_steps=1e9, results_dir=data/checkpoints/rl_baseline
+    cfg.rl.resume_from = args.resume_from
     train_rl_agent(cfg)
     print("training run complete")

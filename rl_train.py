@@ -22,6 +22,7 @@ architecture diagram.
 """
 
 import os
+import signal
 import time
 
 import torch
@@ -334,17 +335,28 @@ def grid_learner_worker(cfg: Config, grid_network: GridCellsRNN, optimizer: Shar
 # Checkpointing
 # --------------------------------------------------------------------------
 
-def _save_checkpoint(path: str, step: int, vision_module, grid_network, actor_critic) -> None:
+def _save_checkpoint(path: str, step: int, vision_module, grid_network, actor_critic,
+                      vision_optimizer, grid_optimizer, ac_optimizer) -> None:
+    """Includes the three optimizers' state_dict()s (not just model weights) so a resumed run
+    doesn't lose RMSprop's running statistics -- see build_shared_models()'s `checkpoint` param
+    for the matching load path, and the roadmap plan for why this matters for Hogwild
+    specifically (a plain torch.optim.Optimizer.state_dict()/load_state_dict() round-trip, same
+    API train.py already uses unmodified for the supervised pipeline).
+    """
     torch.save({
         "step": step,
         "vision_module": vision_module.state_dict(),
         "grid_network": grid_network.state_dict(),
         "actor_critic": actor_critic.state_dict(),
+        "vision_optimizer": vision_optimizer.state_dict(),
+        "grid_optimizer": grid_optimizer.state_dict(),
+        "ac_optimizer": ac_optimizer.state_dict(),
     }, path)
 
 
 def checkpoint_worker(cfg: Config, vision_module: VisionModule, grid_network: GridCellsRNN,
-                       actor_critic: ActorCriticLSTM, step_counter, stop_flag) -> None:
+                       actor_critic: ActorCriticLSTM, vision_optimizer, grid_optimizer,
+                       ac_optimizer, step_counter, stop_flag) -> None:
     """Sole writer of checkpoints -- periodically (polling step_counter every 5s) snapshots
     all three shared models to disk, plus always a final one when the run ends. The three
     models aren't snapshotted as one atomic instant (actor/learner processes may still be
@@ -352,6 +364,12 @@ def checkpoint_worker(cfg: Config, vision_module: VisionModule, grid_network: Gr
     replay_buffer.py's lock-free reads already accept; exact cross-model synchronization isn't
     needed for a checkpoint meant to resume training or run evaluation from, only "recent
     enough." Mirrors train.py's save_checkpoint pattern for the supervised pipeline.
+
+    The post-loop save below (on total_env_steps reached OR a graceful stop_flag stop, see
+    train_rl_agent's SIGTERM/SIGINT handler) writes only `checkpoint_step{N}_final.pt` -- it does
+    NOT also refresh `checkpoint_latest.pt`. A resume after a deliberate stop must point at that
+    `_final.pt` file, not `checkpoint_latest.pt`, or it silently resumes from up to
+    checkpoint_every_env_steps stale.
     """
     _cap_thread_pools()
     os.makedirs(cfg.rl.results_dir, exist_ok=True)
@@ -360,22 +378,30 @@ def checkpoint_worker(cfg: Config, vision_module: VisionModule, grid_network: Gr
         step = step_counter.value
         if step - last_checkpoint_step >= cfg.rl.checkpoint_every_env_steps:
             _save_checkpoint(os.path.join(cfg.rl.results_dir, f"checkpoint_step{step}.pt"),
-                              step, vision_module, grid_network, actor_critic)
+                              step, vision_module, grid_network, actor_critic,
+                              vision_optimizer, grid_optimizer, ac_optimizer)
             _save_checkpoint(os.path.join(cfg.rl.results_dir, "checkpoint_latest.pt"),
-                              step, vision_module, grid_network, actor_critic)
+                              step, vision_module, grid_network, actor_critic,
+                              vision_optimizer, grid_optimizer, ac_optimizer)
             last_checkpoint_step = step
         time.sleep(5)  # polling, not busy-waiting -- checkpoints don't need sub-second precision
 
     step = step_counter.value
     _save_checkpoint(os.path.join(cfg.rl.results_dir, f"checkpoint_step{step}_final.pt"),
-                      step, vision_module, grid_network, actor_critic)
+                      step, vision_module, grid_network, actor_critic,
+                      vision_optimizer, grid_optimizer, ac_optimizer)
 
 
 # --------------------------------------------------------------------------
 # Orchestration
 # --------------------------------------------------------------------------
 
-def build_shared_models(cfg: Config):
+def build_shared_models(cfg: Config, checkpoint: dict | None = None):
+    """checkpoint: the dict loaded from a resume_from file (see train_rl_agent), or None for a
+    fresh run. When resuming, model weights and optimizer state are loaded BEFORE
+    .share_memory()/opt.share_memory() run, never after -- see the long comment below the
+    optimizer construction for why the order is load-bearing, not stylistic.
+    """
     device = torch.device("cpu")  # shared-memory Hogwild is a CPU-multiprocess pattern here;
                                    # see roadmap plan -- GPU would need a different design
     place_ensembles, hd_ensembles = build_rl_ensembles(cfg, device)
@@ -390,6 +416,13 @@ def build_shared_models(cfg: Config):
     actor_critic = ActorCriticLSTM(grid_code_dim=cfg.model.nh_bottleneck,
                                     embed_dim=cfg.rl.actor_critic.embed_dim,
                                     lstm_units=cfg.rl.actor_critic.lstm_units)
+    if checkpoint is not None:
+        # nn.Module.load_state_dict() copies in-place (param.data.copy_(...)), so this is safe
+        # on either side of .share_memory() -- unlike the optimizers below, order doesn't matter
+        # here. Loaded before, only for symmetry with the optimizer case.
+        vision_module.load_state_dict(checkpoint["vision_module"])
+        grid_network.load_state_dict(checkpoint["grid_network"])
+        actor_critic.load_state_dict(checkpoint["actor_critic"])
     for m in (grid_network, vision_module, actor_critic):
         m.share_memory()
 
@@ -398,13 +431,25 @@ def build_shared_models(cfg: Config):
     ac_lr = sum(cfg.rl.actor_critic.learning_rate_range) / 2
     ac_optimizer = SharedRMSprop(actor_critic.parameters(), lr=ac_lr,
                                   momentum=cfg.rl.actor_critic.gradient_momentum)
+    # CRITICAL ORDER, do not reshuffle: load_state_dict() *replaces* each self.state[p][key]
+    # tensor object with a freshly-deserialized one (unlike nn.Module's in-place copy_ above), so
+    # calling .share_memory() first and load_state_dict() second would silently discard the
+    # sharing -- every process would then own a private, unshared copy of the "shared" optimizer
+    # state, and Hogwild would quietly degrade into 32 independent optimizers with no error or
+    # crash to reveal it. .share_memory() must always run AFTER load_state_dict(), never before.
+    if checkpoint is not None:
+        vision_optimizer.load_state_dict(checkpoint["vision_optimizer"])
+        ac_optimizer.load_state_dict(checkpoint["ac_optimizer"])
     for opt in (vision_optimizer, ac_optimizer):
         opt.share_memory()
     # grid_optimizer isn't a SharedRMSprop (train.build_optimizer returns a plain
     # torch.optim.RMSprop, reused unchanged) -- share its state manually the same way. Must
     # also pre-populate momentum_buffer when the group's momentum != 0 (cfg.train.momentum
     # defaults to 0.9, not 0) -- RMSprop.step() looks it up unconditionally in that case and
-    # KeyErrors on a state dict that only has step/square_avg.
+    # KeyErrors on a state dict that only has step/square_avg. Same load-before-share rule as
+    # above applies here too.
+    if checkpoint is not None:
+        grid_optimizer.load_state_dict(checkpoint["grid_optimizer"])
     for group in grid_optimizer.param_groups:
         for p in group["params"]:
             state = grid_optimizer.state.setdefault(p, {})
@@ -425,16 +470,41 @@ def build_shared_models(cfg: Config):
 
 def train_rl_agent(cfg: Config) -> None:
     """Spawns num_actors actor processes + 2 learner processes sharing one set of weights.
-    See module docstring and the roadmap plan's M4 walkthrough."""
+    See module docstring and the roadmap plan's M4 walkthrough.
+
+    If cfg.rl.resume_from is set, loads that checkpoint's model+optimizer state and continues
+    step_counter from its saved step, instead of starting fresh at step 0 -- see the roadmap
+    plan's "체크포인트 리줌 + 데스크탑 이전" section. Resuming requires the SAME Config() (model
+    architecture, dims) that produced the checkpoint: load_state_dict() matches by parameter
+    position, not name, so an architecture change would silently misassign values rather than
+    error.
+    """
     mp.set_start_method("spawn", force=True)  # DMLab global state + CUDA make fork unsafe
 
-    models = build_shared_models(cfg)
+    checkpoint = None
+    if cfg.rl.resume_from:
+        checkpoint = torch.load(cfg.rl.resume_from, map_location="cpu", weights_only=False)
+        print(f"resuming from {cfg.rl.resume_from} at step {checkpoint['step']}")
+
+    models = build_shared_models(cfg, checkpoint)
     frame_buffer = FrameReplayBuffer(capacity=cfg.rl.replay.frame_capacity,
                                       image_size=cfg.rl.env.width)
     seq_buffer = SequenceReplayBuffer(capacity=cfg.rl.replay.sequence_capacity,
                                        seq_len=cfg.rl.grid.seq_len)
-    step_counter = mp.Value("l", 0)
+    step_counter = mp.Value("l", checkpoint["step"] if checkpoint is not None else 0)
     stop_flag = mp.Value("b", False)
+
+    # Graceful stop: stop_flag already gates every worker's loop condition, but nothing has ever
+    # set it (a run could previously only be ended by killing the whole process tree, discarding
+    # up to checkpoint_every_env_steps of progress). SIGTERM/SIGINT here flips it instead, so
+    # `kill -TERM <this process's pid>` lets every actor finish its current env.step(), lets
+    # checkpoint_worker notice within its 5s poll and write checkpoint_step{N}_final.pt (see its
+    # docstring), and lets the plain p.join() calls below return on their own -- no forced kill,
+    # nothing races the final save.
+    def _handle_stop(signum, frame):
+        stop_flag.value = True
+    signal.signal(signal.SIGTERM, _handle_stop)
+    signal.signal(signal.SIGINT, _handle_stop)
 
     processes = []
     for rank in range(cfg.rl.env.num_actors):
@@ -453,7 +523,9 @@ def train_rl_agent(cfg: Config) -> None:
                                 seq_buffer, models["place_ensembles"], models["hd_ensembles"],
                                 step_counter, stop_flag)),
         (checkpoint_worker, (cfg, models["vision_module"], models["grid_network"],
-                              models["actor_critic"], step_counter, stop_flag)),
+                              models["actor_critic"], models["vision_optimizer"],
+                              models["grid_optimizer"], models["ac_optimizer"],
+                              step_counter, stop_flag)),
     ):
         p = mp.Process(target=target, args=args)
         p.start()
