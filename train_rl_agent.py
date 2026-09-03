@@ -10,14 +10,19 @@ each worker; env vars must be set pre-import to reliably constrain the native BL
 own internal thread pools, which torch's own API doesn't fully control on all backends. See the
 RL-agent roadmap plan's "Throughput fix" section.
 
-Run from grid-cells-torch/: python rl/train_square_arena.py
-To resume a stopped run: python rl/train_square_arena.py --resume-from data/checkpoints/rl_baseline/checkpoint_step{N}_final.pt
+Run from grid-cells-torch/: python train_rl_agent.py
+To resume a stopped run: python train_rl_agent.py --resume-from data/checkpoints/rl_baseline/checkpoint_step{N}_final.pt
+To resume a run that was checkpointing into a differently-named directory (e.g. after a desktop
+migration), pass --results-dir so new checkpoints keep landing next to the old ones instead of
+starting a fresh data/checkpoints/rl_baseline/:
+  python train_rl_agent.py --resume-from data/checkpoints/migration_2026-08-20/checkpoint_latest.pt --results-dir data/checkpoints/migration_2026-08-20
 """
 import os
 
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 os.environ.setdefault("MKL_NUM_THREADS", "1")
 os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
 
 import argparse
 import sys
@@ -33,9 +38,17 @@ if __name__ == "__main__":
                          help="checkpoint*.pt path to resume from (must include optimizer "
                               "state, i.e. saved by this codebase's checkpoint_worker); "
                               "omit to start fresh at step 0")
+    parser.add_argument("--results-dir", default=None,
+                         help="directory for new checkpoints/logs; omit to use "
+                              "Config()'s default (data/checkpoints/rl_baseline). Set this "
+                              "when --resume-from points into a differently-named directory, "
+                              "so the resumed run keeps writing there instead of starting a "
+                              "fresh rl_baseline/.")
     args = parser.parse_args()
 
     cfg = Config()  # defaults: num_actors=32, total_env_steps=1e9, results_dir=data/checkpoints/rl_baseline
     cfg.rl.resume_from = args.resume_from
+    if args.results_dir:
+        cfg.rl.results_dir = args.results_dir
     train_rl_agent(cfg)
     print("training run complete")

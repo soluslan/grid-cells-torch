@@ -36,25 +36,49 @@ anyway -- `require` inside an externally-loaded level resolves against the `lab/
 own game_scripts root, not this level's own directory (confirmed empirically via
 `rl/smoke_test.py`). So this file is self-contained, `require`ing only submodule modules.
 
-PLACEHOLDERS -- flagged rather than guessed at, per user request (2026-08-12) to ask before
-inventing unspecified visuals:
-  - intra-maze cue: modelled as a single `fut_obj_cylinder_01.md3` prop (an existing simple
-    geometric prop already used elsewhere in game_scripts), re-positioned each episode. The
-    paper doesn't say what physical object it is, and per-episode recolouring was left out here
-    (would need the model's own texture name, unverifiable without opening `assets/`, which
-    CLAUDE.md's own reading guide marks as binary content not worth inspecting) -- only its
-    position varies episode-to-episode, not yet colour.
-  - distal cues ("buildings rendered at infinity"): NOT implemented. No existing skybox asset
-    with distant buildings was found referenced anywhere in game_scripts (only the generic
-    `map/lab_games/sky/lg_sky_03` sky texture `make_map.lua` already defaults to). Known gap,
-    not a silent omission -- revisit with reference material if/when available.
+Intra-maze cue (2026-08-28 fix): now a wall-mounted texture, not a floating prop -- Fig. 2b's
+actual picture shows a bright patch flush with the wall, and Methods says the cue "changed on
+each episode" in colour and position, same cadence as floor/wall texture and goal location.
+Implemented via the engine's `theme:placeWallDecals` callback (see
+`deepmind/engine/lua_text_level_maker.cc`'s header comment for the exact contract): the engine
+hands the callback every valid wall-art location on the compiled map, and the callback -- using
+the same per-episode-seeded `randomMap` RNG as the goal/floor/wall randomization above -- picks
+one at random and paints it with one of six distinct colours (`CUE_DECAL_PALETTE`, below) drawn
+from `game_scripts/themes/texture_sets.lua`'s existing colour-tinted wall textures. Because
+`placeWallDecals` only fires when `make_map.makeMap` actually recompiles the map -- i.e. only on
+the `_needFullRebuild` true-episode-boundary path, never on the fast-restart path -- the cue
+naturally changes once per episode and not on every mid-episode goal touch, matching the
+floor/wall texture's own cadence for free. `decalFrequency = 0` is passed to
+`themes.fromTextureSet` to suppress its own random decorative wall decals (which would otherwise
+add unrelated visual noise indistinguishable from the one reward-relevant cue).
+Unverified against an actual DMLab build/render (this workspace has no dmlab_module.so built --
+see `grid-cells-torch/README.md`'s RL environment setup) -- the decal texture's UV fit at a wall
+face has only been checked by reading `lua_text_level_maker.cc`'s C++ side, not by looking at
+rendered output.
+
+Distal cues ("buildings rendered at infinity"): CONFIRMED already implemented, no changes
+needed. An earlier version of this file's header claimed no distant-buildings skybox asset
+existed anywhere in `lab/`, based only on grepping asset filenames (`lg_sky_01/02/03`,
+`desert_day/night_sky` -- none of which *sound* like buildings). That check never opened the
+actual texture images and was wrong: `lg_sky_01`, `lg_sky_02` and `lg_sky_03` (converted from
+.tga and inspected directly, 2026-08-28) are all grey high-rise skyline silhouettes against a
+blue sky -- exactly the paper's "buildings ... rendered at infinity" distal cue, and exactly
+what a live DMLab render shows (confirmed against a user-provided screenshot of this same
+skybox). This file already sets `useSkybox = true`, which `make_map.lua` wires to the constant
+`SKYBOX_TEXTURE_NAME = 'map/lab_games/sky/lg_sky_03'` -- unconditionally, not re-randomized per
+episode. A skybox is by construction rendered at infinite distance (always centred on the
+camera, so it never exhibits parallax as the agent moves) and this file never varies which one
+is loaded, so both of the paper's requirements -- "directional but not distance information" and
+"consistent across episodes" -- are already satisfied with no code change.
 ]]
 
 local custom_observations = require 'decorators.custom_observations'
+local debug_observations = require 'decorators.debug_observations'
 local make_map = require 'common.make_map'
 local map_maker = require 'dmlab.system.map_maker'
 local pickups = require 'common.pickups'
 local random = require 'common.random'
+local themes = require 'themes.themes'
 local texture_sets = require 'themes.texture_sets'
 local timeout = require 'decorators.timeout'
 local randomMap = random(map_maker:randomGen())
@@ -65,15 +89,16 @@ local GRID = 10
 local CENTER_MIN, CENTER_MAX = 3, 8
 local EPISODE_LENGTH_SECONDS = 90  -- Supplementary Results 1a: 5,400 steps @ 60fps
 
-local CUE_MODEL = 'models/fut_obj_cylinder_01.md3'  -- placeholder, see header note
--- A REWARD-type pickup with quantity=0, not `pickups.defaults.apple_reward`: the cue is meant
--- to be a purely visual landmark, and reusing an actual reward pickup would corrupt the reward
--- signal (touching it would score +1 for no reason the task defines). type=GOAL would be worse
--- -- that restarts the episode on touch. quantity=0 REWARD is a harmless touch (score +0,
--- entity despawns) until/unless a non-interactive classname is confirmed to work instead.
-local CUE_PICKUP = {
-    name = 'Cue', classname = 'square_arena_cue', model = CUE_MODEL,
-    quantity = 0, type = pickups.type.REWARD,
+-- Intra-maze cue palette: six visually distinct colours, one texture per colour, drawn from
+-- MISHMASH's own existing wall textures (see header note) rather than inventing new assets.
+-- "_bright" variants preferred for salience against the base wall texture.
+local CUE_DECAL_PALETTE = {
+    {tex = 'map/lab_games/lg_style_01_wall_green_bright'},
+    {tex = 'map/lab_games/lg_style_01_wall_red_bright'},
+    {tex = 'map/lab_games/lg_style_02_wall_yellow_bright'},
+    {tex = 'map/lab_games/lg_style_02_wall_blue_bright'},
+    {tex = 'map/lab_games/lg_style_03_wall_orange_bright'},
+    {tex = 'map/lab_games/lg_style_03_wall_gray_bright'},
 }
 
 -- Builds a bordered GRIDxGRID entity layer with a goal cell and a player-start cell (the
@@ -120,9 +145,15 @@ function api:start(episode, seed)
   api._mapCount = 0
   api._goalRow = random:uniformInt(1, GRID)
   api._goalCol = random:uniformInt(1, GRID)
-  api._cueRow = random:uniformInt(1, GRID)
-  api._cueCol = random:uniformInt(1, GRID)
   api._needFullRebuild = true
+  -- DEBUG.CAMERA.TOP_DOWN defaults to a fixed camera at world origin (0,0,500) -- fine for
+  -- maze_gen-based levels, which call debug_observations.setMaze() to recenter it, but this
+  -- level builds via make_map.makeMap{} directly, so that never fires and the camera is left
+  -- pointed at whatever happens to sit near the origin, not this arena (centered at
+  -- ((GRID+2)*100/2, same) in world units, per cellOrigin's cell->world convention). Recenter
+  -- it explicitly; look angle is left at its default ({90,90,0}, already straight down).
+  local center = (GRID + 2) * 100 / 2
+  debug_observations.setCameraPos{center, center, 1200}
 end
 
 function api:nextMap()
@@ -145,39 +176,48 @@ function api:nextMap()
   api._mapCount = api._mapCount + 1
   local entityLayer, variationLayer = buildLayers(
       api._goalRow, api._goalCol, api._spawnRow, api._spawnCol)
-  -- No `kwargs.theme` passed through: make_map.makeMap builds a fresh theme object internally
-  -- on every call when omitted, which is what makes the floor/wall texture re-randomize each
-  -- episode.
+  -- Built explicitly (not left to make_map.makeMap's own default) so a custom
+  -- placeWallDecals can be attached below for the intra-maze cue -- see header note.
+  -- decalFrequency = 0 suppresses fromTextureSet's own random decorative wall decals; without
+  -- this it would also create a theme:placeWallDecals that scatters unrelated decorative
+  -- images, which the engine (deepmind/engine/lua_text_level_maker.cc) only lets one function
+  -- per theme own, so ours would silently replace/conflict with it otherwise.
+  local theme = themes.fromTextureSet{
+      textureSet = texture_sets.MISHMASH,
+      decalFrequency = 0,
+  }
+  -- One cue per real episode, at a random valid wall location, in a random colour -- both
+  -- drawn from the same per-episode-seeded `randomMap` RNG the goal/floor/wall randomization
+  -- above uses, so re-running with the same seed reproduces the same cue. `wallLocs` is every
+  -- wall-art location on this compiled map (see lua_text_level_maker.cc's contract comment);
+  -- picking one at random needs no knowledge of which cells border a wall on our part.
+  function theme:placeWallDecals(wallLocs)
+    if #wallLocs == 0 then return {} end
+    local index = randomMap:uniformInt(1, #wallLocs)
+    local colour = randomMap:choice(CUE_DECAL_PALETTE)
+    return {{index = index, decal = colour}}
+  end
   return make_map.makeMap{
       mapName = 'square_arena_' .. api._mapCount,
       mapEntityLayer = entityLayer,
       mapVariationsLayer = variationLayer,
-      textureSet = texture_sets.MISHMASH,
+      theme = theme,
       useSkybox = true,
   }
 end
 
 function api:createPickup(className)
-  if className == CUE_PICKUP.classname then
-    return CUE_PICKUP
-  end
   return pickups.defaults[className]
 end
 
 function api:updateSpawnVars(spawnVars)
   if spawnVars.classname == 'info_player_start' then
-    spawnVars.origin = cellOrigin(api._spawnRow, api._spawnCol, 40)
+    local x = api._spawnCol * 100 + random:uniformReal(0, 100)
+    local y = api._spawnRow * 100 + random:uniformReal(0, 100)
+    spawnVars.origin = string.format('%d %d %d', x, y, 40)
     spawnVars.randomAngleRange = '180'
   end
   return spawnVars
-end
-
-function api:extraEntities()
-  return {
-      {classname = CUE_PICKUP.classname, model = CUE_MODEL,
-       origin = cellOrigin(api._cueRow, api._cueCol),
-       spawnflags = '1'},  -- static (non-bobbing); see pickups.moveType.STATIC convention
-  }
 end
 
 timeout.decorate(api, EPISODE_LENGTH_SECONDS)

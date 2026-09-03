@@ -1,10 +1,3 @@
-"""Supervised training loop for the grid cell network.
-
-Ports google-deepmind/grid-cells' train.py. Grid scoring is not run inline
-here as it was there -- this file trains and checkpoints only; scoring is
-evaluate.py's job. Library only: run it from notebooks/02_train.ipynb.
-"""
-
 import os
 
 import numpy as np
@@ -17,32 +10,32 @@ from ensembles import (build_ensembles, encode_initial_conditions, encode_target
 from model import GridCellsRNN
 
 
-def build_model(cfg: Config, target_ensembles, device) -> GridCellsRNN:
+def build_model(cfg: Config, target_ensembles, device, vision_dim: int = 0,
+                ego_vel_dim: int | None = None) -> GridCellsRNN:
     return GridCellsRNN(
         target_ensembles=target_ensembles,
         nh_lstm=cfg.model.nh_lstm,
         nh_bottleneck=cfg.model.nh_bottleneck,
         dropout_rates=cfg.model.dropout_rates,
         bottleneck_has_bias=cfg.model.bottleneck_has_bias,
-        init_weight_disp=cfg.model.init_weight_disp,
-        ego_vel_dim=cfg.model.ego_vel_dim,
+        ego_vel_dim=cfg.model.ego_vel_dim if ego_vel_dim is None else ego_vel_dim,
+        vision_dim=vision_dim,
     ).to(device)
 
 
-def build_optimizer(model: GridCellsRNN, cfg: Config) -> torch.optim.Optimizer:
-    # alpha=0.9 and eps=1e-10 match TF1 RMSPropOptimizer's defaults (PyTorch's
-    # are 0.99 / 1e-8). Note TF computes sqrt(v + eps) and PyTorch sqrt(v) +
-    # eps, a structural difference no eps can bridge; measured effect here is
-    # negligible.
+def build_optimizer(model: GridCellsRNN, cfg: Config, learning_rate: float | None = None,
+                     weight_decay: float | None = None) -> torch.optim.Optimizer:
     scope = cfg.model.weight_decay_scope
+    lr = cfg.train.learning_rate if learning_rate is None else learning_rate
+    wd = cfg.model.weight_decay if weight_decay is None else weight_decay
     return torch.optim.RMSprop([
-        {"params": model.decay_parameters(scope), "weight_decay": cfg.model.weight_decay},
+        {"params": model.decay_parameters(scope), "weight_decay": wd},
         {"params": model.no_decay_parameters(scope), "weight_decay": 0.0},
-    ], lr=cfg.train.learning_rate, momentum=cfg.train.momentum, alpha=0.9, eps=1e-10)
+    ], lr=lr, momentum=cfg.train.momentum, alpha=0.9, eps=1e-10)
 
 
 def train_step(model, place_cell_ensembles, head_direction_ensembles, batch, cfg,
-               device, optimizer):
+               device, optimizer, vision_module=None):
     init_pos = batch["init_pos"].to(device)
     init_hd = batch["init_hd"].to(device)
     ego_vel = batch["ego_vel"].to(device)
@@ -59,7 +52,14 @@ def train_step(model, place_cell_ensembles, head_direction_ensembles, batch, cfg
     targets = encode_targets(target_pos, target_hd, place_cell_ensembles,
                               head_direction_ensembles)
 
-    out = model(init_conds, ego_vel)
+    vision_seq = None
+    if vision_module is not None:
+        images = batch["image"].to(device)
+        b, t = images.shape[:2]
+        vis_out = vision_module(images.reshape(b * t, *images.shape[2:]))
+        vision_seq = torch.cat([vis_out.place_probs, vis_out.hd_probs], dim=-1).reshape(b, t, -1)
+
+    out = model(init_conds, ego_vel, vision_seq=vision_seq)
     loss = sum(soft_cross_entropy(logit, target)
                for logit, target in zip(out.logits, targets)).mean()
 
@@ -73,9 +73,6 @@ def train_step(model, place_cell_ensembles, head_direction_ensembles, batch, cfg
 
 
 def train(cfg: Config, shard_dir: str) -> list[float]:
-    """Train to completion; returns the per-epoch mean loss, for plotting."""
-    # Seed before anything samples: weight init, dropout masks and the
-    # DataLoader's shuffling all draw from torch's global generator.
     torch.manual_seed(cfg.train.seed)
     np.random.seed(cfg.train.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -107,7 +104,6 @@ def train(cfg: Config, shard_dir: str) -> list[float]:
         if epoch % cfg.train.save_every_n_epochs == 0:
             save_checkpoint(epoch)
 
-    # Always checkpoint the final epoch even if it misses the save interval.
     if last_epoch % cfg.train.save_every_n_epochs != 0:
         save_checkpoint(last_epoch)
     return epoch_losses

@@ -1,13 +1,3 @@
-"""Every plot the evaluation produces.
-
-Split out from scores.py (which measures, and imports no matplotlib) and
-evaluate.py (which runs the model and wires things together), so that adding
-a panel never touches the code that produces the numbers.
-
-Deliberately does NOT call matplotlib.use(): a notebook wants its own
-inline backend. The headless CLI selects "Agg" itself before importing this.
-"""
-
 import os
 
 import matplotlib.pyplot as plt
@@ -17,16 +7,10 @@ from matplotlib.patches import Rectangle
 
 from scores import circle_mask
 
-# cmap="jet" matches the paper's Fig. 1d colour scheme.
 CMAP = "jet"
 
 
-# --------------------------------------------------------------------------
-# Single panels -- one unit, one row of Fig. 1d
-# --------------------------------------------------------------------------
-
 def sac_plotting_mask(nbins):
-    """NaN outside the region of the autocorrelogram that is ever populated."""
     return np.where(circle_mask([nbins * 2 - 1] * 2, nbins), 1.0, np.nan)
 
 
@@ -40,12 +24,10 @@ def plot_ratemap(ratemap, ax=None, title=None, **kwargs):
 
 
 def plot_sac(sac, nbins, mask_params=None, ax=None, title=None, **kwargs):
-    """Autocorrelogram, with the winning annulus drawn on if given."""
     ax = ax or plt.gca()
     ax.imshow(sac * sac_plotting_mask(nbins), interpolation="none",
               cmap=kwargs.pop("cmap", CMAP), **kwargs)
     if mask_params is not None:
-        # mask_params are in bins, the same units as the SAC image axes.
         centre = nbins - 1
         for radius in mask_params:
             ax.add_artist(plt.Circle((centre, centre), radius, fill=False,
@@ -57,22 +39,13 @@ def plot_sac(sac, nbins, mask_params=None, ax=None, title=None, **kwargs):
 
 
 def plot_hd_tuning(tuning, ax=None, title=None, color="#1a4f7a"):
-    """Polar plot of mean activity vs head direction -- Fig. 1d bottom row.
-
-    `tuning` is mean activity per angular bin (the paper uses 20). Shifted by
-    its own minimum before drawing, for the same reason the resultant-vector
-    measure shifts: a linear layer's activations are signed, and a negative
-    radius is not something a polar axis can show.
-    """
     ax = ax or plt.gca()
     r = np.asarray(tuning, dtype=float)
     r = r - r.min()
     n = len(r)
-    theta = -np.pi + (np.arange(n) + 0.5) * (2 * np.pi / n)  # bin centres
+    theta = -np.pi + (np.arange(n) + 0.5) * (2 * np.pi / n)
     ax.plot(np.append(theta, theta[0]), np.append(r, r[0]), color=color, lw=1.2)
     ax.fill(np.append(theta, theta[0]), np.append(r, r[0]), color=color, alpha=0.25)
-    # All tick positions must be positive: a negative one widens the theta
-    # limits past a full turn (-90deg..360deg) and the plot renders as a wedge.
     ax.set_xticks([0, np.pi / 2, np.pi, 3 * np.pi / 2])
     ax.set_xticklabels([])
     ax.set_yticklabels([])
@@ -82,21 +55,9 @@ def plot_hd_tuning(tuning, ax=None, title=None, color="#1a4f7a"):
     return ax
 
 
-# --------------------------------------------------------------------------
-# Grids of units
-# --------------------------------------------------------------------------
-
 def plot_unit_grid(ratemaps, sacs, mask_params, scores, nbins, indices=None,
                    cols=8, threshold=None, hd_tuning=None, panel_size=1.6,
                    title=None):
-    """Units as columns of vertically-adjacent panels, in the layout of Fig. 1d.
-
-    ratemap on top, autocorrelogram below it, polar plot below that when
-    `hd_tuning` is supplied. Units above `threshold` are boxed in red.
-
-    `indices` selects and orders which units to draw -- pass the top N by
-    score for a preview, or every unit for the full export.
-    """
     if indices is None:
         indices = np.argsort(-np.asarray(scores))
     indices = list(indices)
@@ -138,7 +99,6 @@ def plot_unit_grid(ratemaps, sacs, mask_params, scores, nbins, indices=None,
 
 
 def save_unit_pdf(out_path, **kwargs):
-    """plot_unit_grid straight to a PDF, without leaving the figure open."""
     fig = plot_unit_grid(**kwargs)
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
     with PdfPages(out_path) as pdf:
@@ -148,7 +108,6 @@ def save_unit_pdf(out_path, **kwargs):
 
 
 def plot_score_distribution(scores_by_layer, threshold, ax=None, bins=60):
-    """Where each layer's units sit relative to the grid-like cutoff."""
     ax = ax or plt.gca()
     colors = {"bottleneck": "#1a4f7a", "lstm": "#c0392b"}
     for name, scores in scores_by_layer.items():
@@ -161,32 +120,18 @@ def plot_score_distribution(scores_by_layer, threshold, ax=None, bins=60):
     return ax
 
 
-# --------------------------------------------------------------------------
-# Cell types -- Fig. 1e,g and Ext. Data Fig. 3b
-# --------------------------------------------------------------------------
-
 def plot_scale_distribution(scales, means=None, bics=None, ax=None, bins=20):
-    """Fig. 1e: where grid scales sit, and the mixture BIC chose.
-
-    Cluster centres are annotated with the ratio between neighbours -- the
-    paper's actual claim is about that ratio (~1.5), not the absolute scales,
-    since those depend on the arena.
-    """
     ax = ax or plt.gca()
     s = np.asarray(scales, dtype=float)
     s = s[np.isfinite(s)]
     ax.hist(100 * s, bins=bins, color="#1a4f7a", alpha=0.65, density=True)
 
     if means is not None and len(means):
-        # Capture ylim once: reading it back per-annotation lets the first
-        # annotations move the axis under the later ones.
         top = ax.get_ylim()[1]
         for m in means:
             ax.axvline(100 * m, color="#c0392b", ls="--", lw=1.2)
             ax.text(100 * m, top * 0.99, f"{100*m:.0f}", ha="center", va="top",
                     fontsize=8, color="#c0392b")
-        # Ratio arrows sit at 45% height, clear of the BIC inset above them --
-        # at 80% the inset hid every arrow but the first.
         for a, b in zip(means[:-1], means[1:]):
             ax.annotate("", xy=(100 * b, top * 0.45), xytext=(100 * a, top * 0.45),
                         arrowprops=dict(arrowstyle="<->", lw=0.9, color="#333333"),
@@ -215,11 +160,6 @@ def plot_scale_distribution(scales, means=None, bics=None, ax=None, bins=20):
 
 def plot_gridness_vs_directional(scores_60, resultants, gridness_threshold,
                                  hd_threshold, ax=None):
-    """Fig. 1g: every unit as a point, the two cutoffs as dashed lines.
-
-    The top-right quadrant is the conjunctive population; the paper's count
-    there is 14, 11% of its 129 grid units.
-    """
     ax = ax or plt.gca()
     grid = np.asarray(scores_60) > gridness_threshold
     directional = np.asarray(resultants) > hd_threshold
@@ -244,8 +184,6 @@ def plot_gridness_vs_directional(scores_60, resultants, gridness_threshold,
 
 def plot_stability(stab, scores_60, resultants, gridness_threshold,
                    hd_threshold, ax=None, bins=25):
-    """Ext. Data Fig. 3b: grid-like units hold their map across training,
-    directional units do not."""
     ax = ax or plt.gca()
     stab = np.asarray(stab, dtype=float)
     groups = [("all units", np.isfinite(stab), "#999999"),
@@ -264,29 +202,17 @@ def plot_stability(stab, scores_60, resultants, gridness_threshold,
     return ax
 
 
-# --------------------------------------------------------------------------
-# Path integration
-# --------------------------------------------------------------------------
-
 TRAINED_C, UNTRAINED_C, FLOOR_C, TRUE_C = "#1a4f7a", "#c0392b", "#555555", "#7fb3d5"
 
 
 def plot_path_integration(err, true_pos, decoded, best_mode, decoders,
                           n_examples=4, dt=0.15, paper_final_cm=16):
-    """Trajectories, error accumulation, and final-error distribution.
-
-    `err` and `decoded` are both {condition: {decoder: ...}} over trained /
-    untrained / floor. Half the example trajectories are drawn from the
-    untrained control, so the trained ones have something to be read against.
-    """
     n_steps = true_pos.shape[1]
     t = np.arange(n_steps) * dt
     fig = plt.figure(figsize=(16, 8))
     gs = fig.add_gridspec(2, n_examples, height_ratios=[1, 1.1], hspace=0.35)
     fig.suptitle(f"Path integration (decoder: {best_mode})", fontsize=14)
 
-    # Row 1: example trajectories, true vs decoded -- the paper's Fig. 1b.
-    # First half trained, second half the same trajectories untrained.
     n_trained = n_examples // 2
     for i in range(n_examples):
         cond = "trained" if i < n_trained else "untrained"
@@ -307,8 +233,6 @@ def plot_path_integration(err, true_pos, decoded, best_mode, decoders,
         if i == 0:
             ax.legend(fontsize=8, loc="upper left")
 
-    # Row 2 left: how error accumulates -- the diagnostic a single
-    # end-of-trajectory number cannot give.
     ax = fig.add_subplot(gs[1, :2])
     styles = {"trained": ("-", TRAINED_C), "untrained": ("-", UNTRAINED_C),
               "floor": ("--", FLOOR_C)}
@@ -325,7 +249,6 @@ def plot_path_integration(err, true_pos, decoded, best_mode, decoders,
                  fontsize=10)
     ax.legend(fontsize=8); ax.grid(alpha=0.25)
 
-    # Row 2 right: distribution of end-of-trajectory error -- Fig. 1c.
     ax = fig.add_subplot(gs[1, 2:])
     bins = np.linspace(0, max(200, 100 * err["untrained"][best_mode][:, -1].max()), 60)
     n = err["trained"][best_mode].shape[0]

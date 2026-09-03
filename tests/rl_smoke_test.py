@@ -3,7 +3,7 @@ while it still `require`s the submodule's own Lua library code (`common.make_map
 `decorators.custom_observations`, etc.) unmodified? Random-agent loop pattern from
 `lab/python/random_agent.py`'s `DiscretizedRandomAgent`.
 
-Run from grid-cells-torch/: python rl/smoke_test.py
+Run from grid-cells-torch/: python tests/rl_smoke_test.py
 """
 
 import os
@@ -11,7 +11,7 @@ import os
 import numpy as np
 import deepmind_lab
 
-LEVEL_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "levels")
+LEVEL_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "levels")
 
 
 def _action(*entries):

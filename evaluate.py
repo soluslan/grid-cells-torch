@@ -1,21 +1,3 @@
-"""Unattended evaluation of a checkpoint: run the model, measure, save.
-
-Measures the two things the paper reports for the supervised network:
-
-1. Does it path-integrate? Decoded-position error vs. the true trajectory
-   (Fig. 1b,c: 16cm after 15s trained, 91cm untrained). Runs first -- if this
-   fails there is nothing to interpret in the gridness numbers.
-2. Did grid-like units emerge in the bottleneck? (Fig. 1d,g: 129/512.)
-3. What else is in that layer, and is it stable? Border cells (8.7%),
-   conjunctive grid x head-direction cells (14, 11% of the grid units), the
-   clustering of grid scale (Fig. 1e: 3 clusters at 47/70/106cm), and the
-   ratemap correlation between 2e5 and 3e5 training steps (Ext. Data Fig. 3b).
-
-Library only: notebooks/03_path_integration.ipynb, 04_bottleneck_units.ipynb
-and 05_cell_types.ipynb drive these. Per-unit measures live in scores.py and
-every plot in figures.py, so nothing here overlaps those.
-"""
-
 import os
 
 import numpy as np
@@ -28,20 +10,12 @@ from scores import (BORDER_BINS, BORDER_THRESHOLD, HD_THRESHOLD, GridScorer,
                     ratemap_stability, resultant_vector_length)
 from train import build_model
 
-# The paper's operative criterion: one cutoff for every unit. Every
-# grid-like count it reports (Fig. 1g, the 129/512 headline) uses this.
 GRIDNESS_THRESHOLD = 0.37
-
-# The paper does not say how it decoded position from the place cells, so all
-# three plausible readouts are measured. See PlaceCellEnsemble.decode_position.
 DECODERS = ("argmax", "weighted_mean", "top3")
-
-STEP_SECONDS = 0.15  # 100 stored steps spanning the paper's T=15s trajectory
+STEP_SECONDS = 0.15
 
 
 def collect_batches(loader, n_trajectories):
-    """Materialise the evaluation trajectories once, so that every model and
-    control below is measured on exactly the same data."""
     batches, n = [], 0
     for batch in loader:
         batches.append(batch)
@@ -54,11 +28,6 @@ def collect_batches(loader, n_trajectories):
 @torch.no_grad()
 def run_model(model, batches, place_ensembles, hd_ensembles, device,
               want_activations=False):
-    """-> ({decoder: decoded_pos [N,T,2]}, bottleneck [N,T,U] or None, lstm or None).
-
-    Positions are decoded inside the loop: keeping the raw [N,T,256] place-cell
-    posteriors would cost ~400MB to say the same thing as ~3MB of coordinates.
-    """
     model.eval()
     place = place_ensembles[0]
     decoded = {mode: [] for mode in DECODERS}
@@ -70,7 +39,7 @@ def run_model(model, batches, place_ensembles, hd_ensembles, device,
             place_ensembles, hd_ensembles)
         out = model(init_conds, batch["ego_vel"].to(device))
 
-        probs = torch.softmax(out.logits[0], dim=-1)  # [B,T,n_pc]
+        probs = torch.softmax(out.logits[0], dim=-1)
         for mode in DECODERS:
             decoded[mode].append(place.decode_position(probs, mode).cpu().numpy())
         if want_activations:
@@ -86,13 +55,6 @@ def run_model(model, batches, place_ensembles, hd_ensembles, device,
 
 @torch.no_grad()
 def decode_ground_truth(batches, place_ensembles, device):
-    """The error floor: decode the place-cell code of the TRUE position.
-
-    This is what a network that knew its location perfectly would still score,
-    because the readout can only name cell centres. Without it there is no way
-    to tell how much of the measured error is the network's and how much is the
-    resolution of a 256-cell code.
-    """
     place = place_ensembles[0]
     decoded = {mode: [] for mode in DECODERS}
     for batch in batches:
@@ -103,12 +65,10 @@ def decode_ground_truth(batches, place_ensembles, device):
 
 
 def errors(decoded, true_pos):
-    """[N,T,2] -> per-(trajectory,timestep) Euclidean error [N,T], in metres."""
     return np.linalg.norm(decoded - true_pos, axis=-1)
 
 
 def effect_size(a, b):
-    """Suppl. Methods 3f eqs. (9)-(10): mean difference over pooled s.d."""
     na, nb = len(a), len(b)
     pooled = np.sqrt(((na - 1) * a.var(ddof=1) + (nb - 1) * b.var(ddof=1))
                      / (na + nb - 2))
@@ -117,12 +77,6 @@ def effect_size(a, b):
 
 def path_integration_errors(model, untrained, batches, place_ensembles,
                             hd_ensembles, device, want_activations=False):
-    """-> (err, decoded, bottleneck, lstm).
-
-    `err` and `decoded` share a shape: {condition: {decoder: ...}} over the
-    conditions trained / untrained / floor, holding [N,T] errors and [N,T,2]
-    positions respectively.
-    """
     true_pos = np.concatenate([b["target_pos"].numpy() for b in batches], axis=0)
     decoded_trained, bottleneck, lstm = run_model(
         model, batches, place_ensembles, hd_ensembles, device, want_activations)
@@ -137,7 +91,6 @@ def path_integration_errors(model, untrained, batches, place_ensembles,
 
 
 def best_decoder(err):
-    """Whichever readout the trained network ends the trajectory closest under."""
     return min(DECODERS, key=lambda m: err["trained"][m][:, -1].mean())
 
 
@@ -163,10 +116,6 @@ def report_path_integration(err, dt=STEP_SECONDS):
 
 
 def score_directional(headings, activations):
-    """-> (tuning [n_units, HD_BINS], resultant lengths [n_units]).
-
-    `headings` is target_hd flattened to [N]; `activations` [N, n_units].
-    """
     tuning = directional_ratemap(headings, activations)
     return tuning, resultant_vector_length(tuning)
 
@@ -188,17 +137,7 @@ def report_gridness(name, scores_60):
     return n
 
 
-# --------------------------------------------------------------------------
-# Cell types beyond gridness -- Fig. 1e,f,g and Ext. Data Fig. 3b
-# --------------------------------------------------------------------------
-
 def score_borders(cfg, xy, activations, nbins=BORDER_BINS):
-    """Border score per unit, on the paper's own 20x20 binning.
-
-    Suppl. 3d specifies 20x20 bins for the border score while using 32x32 for
-    gridness, so this rebins rather than reusing the ratemaps notebook 04
-    already has.
-    """
     scorer = build_scorer(cfg, nbins)
     return np.array([
         border_score(scorer.calculate_ratemap(xy[:, 0], xy[:, 1], activations[:, i]))
@@ -206,12 +145,6 @@ def score_borders(cfg, xy, activations, nbins=BORDER_BINS):
 
 
 def grid_scales(sacs, cfg, nbins, grid_like_mask):
-    """Grid scale in metres per unit; NaN wherever `grid_like_mask` is False.
-
-    The mask is required, not optional: the paper's Reporting Summary states
-    "Assessment of grid scale was limited to units determined to be grid-like",
-    and a scale read off a non-periodic autocorrelogram is noise.
-    """
     bin_m = cfg.task.env_size / nbins
     out = np.full(len(sacs), np.nan)
     for i in np.flatnonzero(np.asarray(grid_like_mask)):
@@ -228,7 +161,6 @@ def report_border(name, scores):
 
 
 def report_conjunctive(name, scores_60, resultants):
-    """Fig. 1f,g: units that are both grid-like and directionally tuned."""
     grid = scores_60 > GRIDNESS_THRESHOLD
     directional = resultants > HD_THRESHOLD
     both = int((grid & directional).sum())
@@ -249,14 +181,10 @@ def report_grid_scales(name, scales):
     return s
 
 
-# The paper clustered 129 scales. Below this many, a mixture model has more
-# freedom than the data constrains and BIC starts selecting noise, so the
-# output is reported but flagged rather than read as a result.
 MIN_SCALES_TO_CLUSTER = 30
 
 
 def report_scale_clustering(name, scales, n_shuffles=500, seed=0):
-    """-> (k, means, bics, ratios, discreteness, null, p). Fig. 1e."""
     s = scales[np.isfinite(scales)]
     if len(s) < 10:
         print(f"  {name}: only {len(s)} scales, too few to cluster")
@@ -278,12 +206,6 @@ def report_scale_clustering(name, scales, n_shuffles=500, seed=0):
 
 @torch.no_grad()
 def layer_ratemaps(cfg, checkpoint, batches, device, nbins, layer="bottleneck"):
-    """-> (ratemaps [n_units][nbins,nbins], epoch) for one checkpoint.
-
-    Pass the same `batches` for both checkpoints so the two sets of maps come
-    from identical trajectories -- otherwise the correlation between them
-    mixes representational drift with a different sample of the arena.
-    """
     model, _, epoch, place, hd = load_models(cfg, checkpoint, device)
     _, bottleneck, lstm = run_model(model, batches, place, hd, device,
                                     want_activations=True)
@@ -297,13 +219,11 @@ def layer_ratemaps(cfg, checkpoint, batches, device, nbins, layer="bottleneck"):
 
 
 def stability(ratemaps_a, ratemaps_b):
-    """Per-unit ratemap correlation between two training checkpoints."""
     return np.array([ratemap_stability(a, b)
                      for a, b in zip(ratemaps_a, ratemaps_b)])
 
 
 def report_stability(name, stab, scores_60, resultants):
-    """Ext. Data Fig. 3b: grid-like units are stable, directional ones are not."""
     grid = scores_60 > GRIDNESS_THRESHOLD
     directional = resultants > HD_THRESHOLD
     print(f"  {name}: all units mean r={np.nanmean(stab):.3f}")
@@ -316,7 +236,6 @@ def report_stability(name, stab, scores_60, resultants):
 
 
 def load_models(cfg, checkpoint, device, untrained_seed=0):
-    """-> (trained, untrained, epoch, place_ensembles, hd_ensembles)."""
     place_ensembles, hd_ensembles = build_ensembles(cfg, device)
     assert len(place_ensembles) == 1, "decoding assumes a single place ensemble"
     target_ensembles = place_ensembles + hd_ensembles
@@ -336,13 +255,6 @@ def build_scorer(cfg, nbins):
 
 
 def default_out_dir(checkpoint):
-    """data/checkpoints/<run>/ckpt.pt -> results/<run>/.
-
-    Everything large and regenerable lives under data/ and is gitignored;
-    results/ holds the small figures worth keeping. The two are paired by run
-    name, so naming a run at training time is enough to keep its outputs
-    separate from every other run's.
-    """
     ckpt_dir = os.path.abspath(os.path.dirname(checkpoint))
     parts = ckpt_dir.split(os.sep)
     if "checkpoints" in parts:

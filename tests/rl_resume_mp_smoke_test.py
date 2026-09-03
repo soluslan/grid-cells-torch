@@ -3,7 +3,7 @@ wiring (torch.multiprocessing spawn, actual actor/learner/checkpoint processes):
 produce a checkpoint_step{N}_final.pt without a forced kill, and does --resume-from continue
 step_counter from N instead of restarting at 0?
 
-Run from grid-cells-torch/: python rl/resume_mp_smoke_test.py
+Run from grid-cells-torch/: python tests/rl_resume_mp_smoke_test.py
 """
 import glob
 import os
@@ -11,6 +11,8 @@ import re
 import signal
 import sys
 import time
+
+os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
 
 sys.path.insert(0, ".")
 

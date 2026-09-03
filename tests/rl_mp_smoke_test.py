@@ -3,8 +3,12 @@ model/optimizer state across actual OS process boundaries) survive a short run w
 deadlocking or crashing? Small num_actors + tiny total_env_steps, per the roadmap plan's M4
 verification step ("short smoke run e.g. 1e5 steps instead of 1e9").
 
-Run from grid-cells-torch/: python rl/mp_smoke_test.py
+Run from grid-cells-torch/: python tests/rl_mp_smoke_test.py
 """
+
+import os
+
+os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
 
 import sys
 import time

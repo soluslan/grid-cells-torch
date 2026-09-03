@@ -3,7 +3,7 @@ build_shared_models(cfg, checkpoint) actually (a) load real weights/optimizer st
 fresh random init, and (b) leave every loaded optimizer-state tensor genuinely
 `.is_shared() == True`, not a private post-load copy that silently un-shares Hogwild?
 
-Run from grid-cells-torch/: python rl/resume_unit_test.py
+Run from grid-cells-torch/: python tests/rl_resume_unit_test.py
 """
 import sys
 
@@ -38,7 +38,8 @@ def _populate_optimizer_state(models):
 
     h0, c0 = models["grid_network"].init_hidden(
         [torch.zeros(2, models["place_ensemble"].n_cells), torch.zeros(2, models["hd_ensemble"].n_cells)])
-    bottleneck, _ = models["grid_network"].step(torch.randn(2, 3), (h0, c0))
+    vision_t = torch.randn(2, models["place_ensemble"].n_cells + models["hd_ensemble"].n_cells)
+    bottleneck, _ = models["grid_network"].step(torch.randn(2, 4), vision_t, (h0, c0))
     grid_loss = bottleneck.sum()
     models["grid_optimizer"].zero_grad()
     grid_loss.backward()
