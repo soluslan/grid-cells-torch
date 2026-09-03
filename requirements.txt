@@ -1,0 +1,15 @@
+torch==2.13.0+cu130  # 2.7+ needed for Blackwell/RTX 50-series (sm_120); resolves from default PyPI index
+numpy==2.5.2
+pandas==3.0.5
+matplotlib==3.11.1
+scipy==1.18.0
+scikit-learn==1.9.0
+dm_env==1.6
+six==1.17.0
+Pillow==12.3.0
+
+# only needed to regenerate trajectories via notebooks/00_make_dataset.ipynb
+ratinabox
+
+# deepmind_lab is not listed here -- not on PyPI, built from the lab/ submodule
+# and installed as a wheel by notebooks/06_setup_rl_environment.ipynb

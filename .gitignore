@@ -10,7 +10,10 @@ data/square_room_100steps_2.2m_1000000/
 # Converted training shards (~2.3GB) -- regenerate via notebooks/01_prepare_data.ipynb
 data/shards/
 
-# Model weights (~62MB per run) -- regenerate via notebooks/02_train.ipynb
+# Model weights. Supervised runs (~45MB, notebooks/02_train.ipynb) are small;
+# RL runs (train_rl_agent.py) are not -- a single full checkpoint (weights +
+# optimizer + both replay buffers) is ~19.7GB, and only the most recent one is
+# worth keeping (see README "RL agent").
 data/checkpoints/
 
 # results/ is the opposite: small, kept, and tracked. Figures only.
