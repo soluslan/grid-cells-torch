@@ -1,4 +1,6 @@
-torch==2.13.0+cu130  # 2.7+ needed for Blackwell/RTX 50-series (sm_120); resolves from default PyPI index
+# Requires Python 3.12 (numpy/scipy's floor here; every other pin below supports 3.12+ too)
+--extra-index-url https://download.pytorch.org/whl/cu130
+torch==2.13.0+cu130  # 2.7+ needed for Blackwell/RTX 50-series (sm_120); +cu130 build only exists on the PyTorch index above, not default PyPI
 numpy==2.5.2
 pandas==3.0.5
 matplotlib==3.11.1

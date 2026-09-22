@@ -14,6 +14,9 @@ release.
 
 ## Setup
 
+Requires Python 3.12 (the floor set by `numpy`/`scipy` in `requirements.txt`;
+every other pin there supports 3.12+ too).
+
 ```
 pip install -r requirements.txt
 ```
