@@ -27,12 +27,15 @@ class ObsInfo:
     t: int
     after_goal: bool
     first_of_episode: bool
+    env: int = 0
 
 
 class ScriptedEnv:
     """Lab-like env: episodes of `episode_len` actions, +10 and a teleport at `goal_steps`."""
 
-    def __init__(self, episode_len: int, goal_steps, registry: dict, id_offset: int = 0):
+    def __init__(self, episode_len: int, goal_steps, registry: dict, id_offset: int = 0,
+                 env_index: int = 0):
+        self.env_index = env_index
         self.episode_len = episode_len
         self.goal_steps = set(goal_steps)
         self.registry = registry
@@ -46,7 +49,8 @@ class ScriptedEnv:
         self.obs_id = self.next_id
         self.next_id += 1
         assert self.obs_id < 250, "scripted run too long for unique image ids"
-        self.registry[self.obs_id] = ObsInfo(self.episode, self.t, after_goal, first)
+        self.registry[self.obs_id] = ObsInfo(self.episode, self.t, after_goal, first,
+                                             self.env_index)
 
     def reset(self, seed=None):
         self.episode += 1
@@ -130,11 +134,13 @@ class SpyActorCritic(nn.Module):
         z = torch.zeros(1, batch_size, self.lstm_units, device=device)
         return z, z.clone()
 
+    recording = True
+
     def step(self, image, reward, prev_action, grid_code, goal_grid_code, hidden):
         ids = image_id(image)
         h, c = hidden
         out = (h + 1.0, c + 1.0)
-        for b, oid in enumerate(ids):
+        for b, oid in enumerate(ids if self.recording else []):
             self.trace.calls.append(Call(
                 oid, b, float(reward[b, 0]), int(prev_action[b]),
                 goal_grid_code[b].detach().clone(), h[0, b].detach().clone(),
@@ -158,11 +164,13 @@ class SpyGrid(nn.Module):
         z = torch.full((1, b, self.nh_lstm), marker)
         return z, z.clone()
 
+    recording = True
+
     def step(self, vel_t, vision_t, hidden):
         h, c = hidden
         out = (h + 1.0, c + 1.0)
         ids = self.current_ids or [None] * h.shape[1]
-        for b in range(h.shape[1]):
+        for b in range(h.shape[1] if self.recording else 0):
             self.trace.grid_calls.append(GridCall(ids[b], b, h[0, b].clone(), out[0][0, b].clone()))
         code = out[0][0].mean(-1, keepdim=True).expand(-1, self.nh_bottleneck) + 1.0
         return code, out
@@ -234,4 +242,65 @@ def run_a3c(episode_len=30, goal_steps=(5, 17), n_episodes=2, n_step=8, seq_len=
     images = seqs._data["image"][:len(seqs)]
     for seq in images:
         trace.sequences.append(image_id(seq))
+    return trace
+
+
+def run_a2c(episode_len=30, goal_steps=(5, 17), n_updates=8, n_step=8, seq_len=10,
+            num_envs=2, a2c_overrides: dict | None = None) -> Trace:
+    from config import Config
+    from grid_cells import rl_a2c
+    from grid_cells.ensembles import build_rl_ensembles
+    from grid_cells.replay_buffer import TimeMajorReplay
+    from grid_cells.vec_env import SyncVecEnv
+    from grid_cells.vision import VisionModule
+
+    registry = {}
+    trace = Trace(registry)
+    cfg = Config()
+    cfg.rl.actor_critic.n_step = n_step
+    cfg.rl.grid.seq_len = seq_len
+    cfg.rl.a2c.vision_updates_per_rollout = 0
+    cfg.rl.a2c.grid_updates_per_rollout = 0
+    for key, value in (a2c_overrides or {}).items():
+        setattr(cfg.rl.a2c, key, value)
+    torch.manual_seed(0)
+    device = torch.device("cpu")
+
+    place, hd = build_rl_ensembles(cfg, device)
+    spy_grid = SpyGrid(trace)
+    vision = IdTrackingVision(VisionModule(place[0], hd[0]), spy_grid)
+    ac = SpyActorCritic(trace)
+    agent = rl_a2c.Agent(cfg, vision, spy_grid, ac, device)
+    original_act = agent.act
+
+    def act(state, obs, ego_vel):
+        spy_grid.recording = ac.recording = torch.is_grad_enabled()
+        return original_act(state, obs, ego_vel)
+    agent.act = act
+
+    factories = [lambda i=i: ScriptedEnv(episode_len, goal_steps, registry, id_offset=125 * i,
+                                                 env_index=i)
+                 for i in range(num_envs)]
+    vec_env = SyncVecEnv(factories, cfg.rl.env)
+    replay = TimeMajorReplay(1000, num_envs)
+    learner = rl_a2c.A2CLearner(cfg, vec_env, agent, torch.optim.RMSprop(ac.parameters()),
+                                None, None, place, hd, replay)
+    original_update = learner.update_actor_critic
+
+    def recording_update(rollout):
+        values = rollout["values"].detach()
+        for b in range(values.shape[1]):
+            trace.windows.append(Window(
+                b, [int(round(float(v))) for v in values[:, b]],
+                [bool(c) for c in rollout["cuts"][:, b]], float(rollout["bootstrap"][b])))
+        return original_update(rollout)
+    learner.update_actor_critic = recording_update
+
+    for _ in range(n_updates):
+        learner.train_iteration()
+
+    for _ in range(20):
+        batch = replay.sample_sequences(4, seq_len)
+        for seq in batch["image"]:
+            trace.sequences.append([int(v) for v in seq[:, 0, 0, 0]])
     return trace

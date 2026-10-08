@@ -57,7 +57,7 @@ def find_latest_checkpoint(checkpoint_dir):
 
 
 def run_episode(env, seed, cfg, grid_network, vision_module, actor_critic,
-                 place, hd, has_rl_lstm, ego_vel_dim):
+                 place, hd, has_rl_lstm, ego_vel_dim, zero_grid_init=False, keep_frames=True):
     env_cfg = cfg.rl.env
 
     def observe():
@@ -86,8 +86,12 @@ def run_episode(env, seed, cfg, grid_network, vision_module, actor_critic,
     image64, pos_m, vel_trans, vel_rot = observe()
     start_pos = pos_m.clone()
 
-    grid_hidden = grid_network.init_hidden_from_predictions(
-        [torch.zeros(1, place.n_cells), torch.zeros(1, hd.n_cells)])
+    if zero_grid_init:
+        z = torch.zeros(1, 1, grid_network.nh_lstm)
+        grid_hidden = (z, z.clone())
+    else:
+        grid_hidden = grid_network.init_hidden_from_predictions(
+            [torch.zeros(1, place.n_cells), torch.zeros(1, hd.n_cells)])
     ac_hidden = actor_critic.init_hidden(1)
     prev_action = torch.zeros(1, dtype=torch.long)
     goal_grid_code = torch.zeros(1, cfg.model.nh_bottleneck)
@@ -120,8 +124,8 @@ def run_episode(env, seed, cfg, grid_network, vision_module, actor_critic,
             if not env.is_running():
                 break
             sub_obs = env.observations()
-            frame = draw_hud(sub_obs["RGB_INTERLEAVED"].copy(), 0, len(frames) / FPS, cumulative_reward)
-            frames.append(frame)
+            frames.append(draw_hud(sub_obs["RGB_INTERLEAVED"].copy(), 0, len(frames) / FPS,
+                                   cumulative_reward) if keep_frames else None)
             pos_now = world_to_meters(torch.from_numpy(sub_obs["DEBUG.POS.TRANS"][:2].copy()).float(), env_cfg)
             positions.append(pos_now.clone())
             if r > 0:
@@ -231,6 +235,10 @@ def main():
     parser.add_argument("--checkpoint-dir", default=CHECKPOINT_DIR)
     parser.add_argument("--episodes", type=int, default=N_EPISODES)
     parser.add_argument("--out-dir", default=None)
+    parser.add_argument("--no-media", action="store_true",
+                        help="skip videos and plots; only write summary.csv (use for 100-episode "
+                             "scores, as in the paper)")
+    parser.add_argument("--first-seed", type=int, default=0)
     args = parser.parse_args()
 
     t_start = time.time()
@@ -253,23 +261,37 @@ def main():
 
     env_cfg = cfg.rl.env
     level_dir = os.path.abspath(env_cfg.level_directory)
+    size = 64 if args.no_media else VIDEO_SIZE
     env = deepmind_lab.Lab(
         env_cfg.level,
         ["RGB_INTERLEAVED", "VEL.TRANS", "VEL.ROT", "DEBUG.POS.TRANS", "DEBUG.POS.ROT"],
-        config={"width": str(VIDEO_SIZE), "height": str(VIDEO_SIZE), "levelDirectory": level_dir},
+        config={"width": str(size), "height": str(size), "levelDirectory": level_dir},
     )
+    zero_grid_init = ckpt.get("algorithm") == "a2c"
+    summary_path = os.path.join(out_dir, "summary.csv")
+    with open(summary_path, "w") as f:
+        f.write("episode,seed,reward,goals,first_goal_s,mean_later_latency_s\n")
 
     torch.manual_seed(0)
     for ep in range(args.episodes):
+        seed = args.first_seed + ep
         t_ep = time.time()
-        print(f"\n--- episode {ep} (seed={ep}) ---")
+        print(f"\n--- episode {ep} (seed={seed}) ---")
         frames, positions, goal_touch_indices, cumulative_reward = run_episode(
-            env, ep, cfg, grid_network, vision_module, actor_critic, place, hd,
-            has_rl_lstm, ego_vel_dim)
+            env, seed, cfg, grid_network, vision_module, actor_critic, place, hd,
+            has_rl_lstm, ego_vel_dim, zero_grid_init=zero_grid_init,
+            keep_frames=not args.no_media)
         t_run = time.time()
+        touches_s = [(i - 1) / FPS for i in goal_touch_indices]
+        first = touches_s[0] if touches_s else float("nan")
+        later = float(np.mean(np.diff(touches_s))) if len(touches_s) > 1 else float("nan")
+        with open(summary_path, "a") as f:
+            f.write(f"{ep},{seed},{cumulative_reward:.0f},{len(touches_s)},{first:.2f},{later:.2f}\n")
         print(f"  ran {len(frames)} frames ({len(frames) / FPS:.1f}s), "
-              f"reward={cumulative_reward:.0f}, goal touches={len(goal_touch_indices)} "
-              f"({t_run - t_ep:.1f}s)")
+              f"reward={cumulative_reward:.0f}, goal touches={len(goal_touch_indices)}, "
+              f"first goal {first:.1f}s, later latency {later:.1f}s ({t_run - t_ep:.1f}s)")
+        if args.no_media:
+            continue
 
         fp_path = os.path.join(out_dir, f"firstperson_ep{ep}.mp4")
         save_firstperson_video(frames, fp_path)
@@ -283,7 +305,7 @@ def main():
 
         traj_path = os.path.join(out_dir, f"trajectory_ep{ep}.png")
         save_trajectory_figure(positions, goal_touch_indices, positions[0], env_cfg.env_size_m,
-                                step, ep, traj_path)
+                                step, seed, traj_path)
         print(f"  saved {traj_path} ({time.time() - t_td:.1f}s)")
 
     env.close()

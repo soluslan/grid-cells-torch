@@ -95,6 +95,23 @@ class ActorCriticConfig:
 
 
 @dataclass
+class A2CConfig:
+    num_envs: int = 32
+    device: str = "cuda"
+    vision_updates_per_rollout: int = 51
+    grid_updates_per_rollout: int = 2
+    replay_frames: int = 400_000
+    vision_mask_mode: str = "per_unit"
+    reset_policy_on_goal: bool = False
+    cut_return_on_goal: bool = False
+    reinit_grid_on_goal: bool = False
+    grid_train_zero_init: bool = True
+    ac_grad_clip_norm: float | None = None
+    checkpoint_every_frames: int = 10_000_000
+    renderer: str = "hardware"
+
+
+@dataclass
 class ReplayBufferConfig:
     frame_capacity: int = 200_000
     sequence_capacity: int = 2_000
@@ -107,6 +124,7 @@ class RLConfig:
     grid: GridRLConfig = field(default_factory=GridRLConfig)
     actor_critic: ActorCriticConfig = field(default_factory=ActorCriticConfig)
     replay: ReplayBufferConfig = field(default_factory=ReplayBufferConfig)
+    a2c: A2CConfig = field(default_factory=A2CConfig)
     pc_scale: tuple = (0.4,)
     total_env_steps: int = 1_000_000_000
     seed: int = 0

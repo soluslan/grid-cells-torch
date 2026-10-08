@@ -34,8 +34,11 @@ class VisionCNN(nn.Module):
 
 class VisionModule(nn.Module):
     def __init__(self, place_ensemble: CellEnsemble, hd_ensemble: CellEnsemble,
-                 embed_dim: int = 256, mask_prob: float = 0.95):
+                 embed_dim: int = 256, mask_prob: float = 0.95, mask_mode: str = "per_unit"):
         super().__init__()
+        if mask_mode not in ("per_unit", "whole"):
+            raise ValueError(f"unknown mask_mode {mask_mode!r}")
+        self.mask_mode = mask_mode
         self.cnn = VisionCNN(embed_dim)
         self.place_head = nn.Linear(embed_dim, place_ensemble.n_cells)
         self.hd_head = nn.Linear(embed_dim, hd_ensemble.n_cells)
@@ -46,8 +49,14 @@ class VisionModule(nn.Module):
         place_probs = F.softmax(self.place_head(e), dim=-1)
         hd_probs = F.softmax(self.hd_head(e), dim=-1)
 
-        place_mask = (torch.rand_like(place_probs) >= self.mask_prob).float()
-        hd_mask = (torch.rand_like(hd_probs) >= self.mask_prob).float()
+        if self.mask_mode == "whole":
+            keep = (torch.rand(place_probs.shape[:-1] + (1,), device=place_probs.device)
+                    >= self.mask_prob).float()
+            place_mask = keep.expand_as(place_probs)
+            hd_mask = keep.expand_as(hd_probs)
+        else:
+            place_mask = (torch.rand_like(place_probs) >= self.mask_prob).float()
+            hd_mask = (torch.rand_like(hd_probs) >= self.mask_prob).float()
         place_probs = place_probs * place_mask
         hd_probs = hd_probs * hd_mask
 

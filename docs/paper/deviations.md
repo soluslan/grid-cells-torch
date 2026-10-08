@@ -85,6 +85,9 @@ legacy loop (`rl_train.py` at `55ef4ea`, later `grid_cells/rl_a3c.py`); "A2C" is
 | E | goal arrival | not an episode end; agent continues (supp p.4) | policy LSTM reset and return cut (bootstrap 0) | episode continues: no reset, bootstrap through |
 | F | vision masking granularity | "5% of the time" vs "zeroed the units with a probability of 95%" (main p.2, p.7) | per-unit | per-unit by default, whole-vector selectable |
 | G | grid replay sequences across teleports | implied by C | cut at teleports | cut only at episode ends |
+| H | initial state of replayed grid sequences | grid LSTM "set to zero", not ground truth (main p.7) | ground-truth place/HD init (`train_step`) | zero state (`grid_train_zero_init`) |
+| — | actor–critic RMSProp | Table 2: "gradient momentum 0.99 — momentum parameter of the shared RMSProp" (decay rate not given) | decay 0.99, momentum 0.99, eps 1e-8 | same (unchanged on purpose; ambiguous, a suspect if learning stalls) |
+| — | vision optimizer | not specified | RMSProp lr 1e-4, decay 0.99 | same |
 | — | unroll length / action repeat | Table 2: 100 / 4 (supp p.25) | 100 / 4 | 100 / 4 |
 | — | hyperparameter ranges in Table 2 | sampled per replica (60 replicas, main p.7) | midpoint of each range | midpoint of each range |
 | — | vision / grid update frequency | unspecified (one thread each) | as fast as each process runs | fixed counts per rollout, from the legacy run's measured ratios |

@@ -1,3 +1,4 @@
+import numpy as np
 import torch
 import torch.multiprocessing as mp
 
@@ -115,3 +116,75 @@ class SequenceAccumulator:
                 image=torch.stack(self._image),
             )
             self.reset(init_pos=target_pos, init_hd=target_hd)
+
+
+class TimeMajorReplay:
+    """Replay for the synchronous learner: all envs step together, so experience is stored as a
+    (time, env) ring of per-step records with images kept as uint8. Vision samples single frames;
+    the grid network samples windows of consecutive steps from one env that stay inside one
+    episode (and may cross goal teleports)."""
+
+    def __init__(self, capacity_steps: int, num_envs: int, image_shape=(3, 64, 64),
+                 ego_vel_dim: int = 4, seed: int = 0):
+        t, b = capacity_steps, num_envs
+        self.capacity = t
+        self.num_envs = b
+        self.image = torch.zeros((t, b, *image_shape), dtype=torch.uint8)
+        self.pos = torch.zeros((t, b, 2))
+        self.hd = torch.zeros((t, b, 1))
+        self.ego_vel = torch.zeros((t, b, ego_vel_dim))
+        self.episode = torch.full((t, b), -1, dtype=torch.long)
+        self.cursor = 0
+        self.count = 0
+        self.rng = np.random.default_rng(seed)
+
+    def __len__(self) -> int:
+        return self.count * self.num_envs
+
+    def add(self, image, pos, hd, ego_vel, episode) -> None:
+        i = self.cursor
+        self.image[i] = torch.as_tensor(image)
+        self.pos[i] = torch.as_tensor(pos)
+        self.hd[i] = torch.as_tensor(hd)
+        self.ego_vel[i] = torch.as_tensor(ego_vel)
+        self.episode[i] = torch.as_tensor(episode)
+        self.cursor = (i + 1) % self.capacity
+        self.count = min(self.count + 1, self.capacity)
+
+    def _physical(self, logical):
+        start = (self.cursor - self.count) % self.capacity
+        return (start + logical) % self.capacity
+
+    def sample_frames(self, n: int) -> dict:
+        t = self._physical(self.rng.integers(0, self.count, n))
+        b = self.rng.integers(0, self.num_envs, n)
+        return {"image": self.image[t, b], "pos": self.pos[t, b], "hd": self.hd[t, b]}
+
+    def sample_sequences(self, n: int, length: int, max_tries: int = 10_000):
+        if self.count < length:
+            return None
+        starts, envs = [], []
+        for _ in range(max_tries):
+            i0 = int(self.rng.integers(0, self.count - length + 1))
+            b = int(self.rng.integers(0, self.num_envs))
+            first, last = self._physical(i0), self._physical(i0 + length - 1)
+            if self.episode[first, b] >= 0 and self.episode[first, b] == self.episode[last, b]:
+                starts.append(i0)
+                envs.append(b)
+                if len(starts) == n:
+                    break
+        if len(starts) < n:
+            return None
+        t = self._physical(np.asarray(starts)[:, None] + np.arange(length)[None, :])
+        b = np.asarray(envs)[:, None]
+        return {"image": self.image[t, b], "pos": self.pos[t, b], "hd": self.hd[t, b],
+                "ego_vel": self.ego_vel[t, b]}
+
+    def state_dict(self) -> dict:
+        return {"image": self.image, "pos": self.pos, "hd": self.hd, "ego_vel": self.ego_vel,
+                "episode": self.episode, "cursor": self.cursor, "count": self.count}
+
+    def load_state_dict(self, state: dict) -> None:
+        for name in ("image", "pos", "hd", "ego_vel", "episode"):
+            getattr(self, name).copy_(state[name])
+        self.cursor, self.count = state["cursor"], state["count"]

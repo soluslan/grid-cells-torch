@@ -91,8 +91,9 @@ class GridCellsRNN(nn.Module):
     def forward(
         self, init_conds: list[torch.Tensor], vels: torch.Tensor,
         vision_seq: torch.Tensor | None = None,
+        initial_state: tuple[torch.Tensor, torch.Tensor] | None = None,
     ) -> ModelOutput:
-        h0, c0 = self.init_hidden(init_conds)
+        h0, c0 = self.init_hidden(init_conds) if initial_state is None else initial_state
 
         if vision_seq is None:
             lstm_out, _ = self.lstm(vels, (h0, c0))

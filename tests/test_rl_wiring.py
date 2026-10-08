@@ -81,15 +81,8 @@ def test_bootstrap_next_state(impl):
 
 def trace_next_offset(trace, window):
     later = sorted(i for i, info in trace.registry.items()
-                   if i > window.value_ids[-1] and env_of(trace, i) == window.env)
+                   if i > window.value_ids[-1] and info.env == window.env)
     return later[0] - window.value_ids[-1]
-
-
-def env_of(trace, obs_id):
-    for call in trace.calls:
-        if call.obs_id == obs_id:
-            return call.env
-    return None
 
 
 @contract("episode_reset")
@@ -153,3 +146,22 @@ def test_sequences_span_teleports(impl):
         assert len(episodes) == 1, "a replayed sequence crosses an episode boundary"
         spans_goal |= any(trace.registry[i].after_goal for i in seq[1:])
     assert spans_goal, "no replayed grid sequence contains a teleport"
+
+
+@pytest.mark.parametrize("flag, contract_fn", [
+    ("reset_policy_on_goal", "test_goal_is_not_terminal"),
+    ("cut_return_on_goal", "test_goal_is_not_terminal"),
+    ("reinit_grid_on_goal", "test_grid_state_continues_through_teleport"),
+])
+def test_contracts_catch_a2c_ablation_flags(flag, contract_fn):
+    if "a2c" not in IMPLEMENTATIONS:
+        pytest.skip("no A2C implementation")
+    saved = _traces.pop("a2c", None)
+    try:
+        _traces["a2c"] = rl_harness.run_a2c(a2c_overrides={flag: True})
+        with pytest.raises(AssertionError):
+            globals()[contract_fn]("a2c")
+    finally:
+        _traces.pop("a2c", None)
+        if saved is not None:
+            _traces["a2c"] = saved
