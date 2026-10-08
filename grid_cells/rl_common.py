@@ -15,7 +15,8 @@ def make_dmlab_env(env_cfg, renderer: str = "hardware", width: int | None = None
     return deepmind_lab.Lab(
         level or env_cfg.level, OBSERVATIONS,
         config={"width": str(width or env_cfg.width), "height": str(height or env_cfg.height),
-                "levelDirectory": os.path.abspath(env_cfg.level_directory)},
+                "levelDirectory": os.path.abspath(env_cfg.level_directory),
+                "goalVisible": "true" if env_cfg.goal_visible else "false"},
         renderer=renderer)
 
 

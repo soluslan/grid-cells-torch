@@ -64,6 +64,7 @@ class RLEnvConfig:
     action_repeat: int = 4
     num_actors: int = 32
     velocity_noise_std: float = 0.01
+    goal_visible: bool = True
 
 
 @dataclass

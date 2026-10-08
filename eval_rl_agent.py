@@ -239,6 +239,7 @@ def main():
                         help="skip videos and plots; only write summary.csv (use for 100-episode "
                              "scores, as in the paper)")
     parser.add_argument("--first-seed", type=int, default=0)
+    parser.add_argument("--hidden-goal", action="store_true")
     args = parser.parse_args()
 
     t_start = time.time()
@@ -265,7 +266,8 @@ def main():
     env = deepmind_lab.Lab(
         env_cfg.level,
         ["RGB_INTERLEAVED", "VEL.TRANS", "VEL.ROT", "DEBUG.POS.TRANS", "DEBUG.POS.ROT"],
-        config={"width": str(size), "height": str(size), "levelDirectory": level_dir},
+        config={"width": str(size), "height": str(size), "levelDirectory": level_dir,
+                "goalVisible": "false" if args.hidden_goal else "true"},
     )
     zero_grid_init = ckpt.get("algorithm") == "a2c"
     summary_path = os.path.join(out_dir, "summary.csv")

@@ -132,7 +132,43 @@ local function cellOrigin(row, col, z)
   return string.format('%d %d %d', col * 100 + 50, row * 100 + 50, z or 30)
 end
 
+local tensor = require 'dmlab.system.tensor'
+
 local api = {}
+
+-- Level setting `goalVisible` (Lab(config={goalVisible='false'})): the paper's goal is
+-- "unmarked" (Methods p.6), but the text-level 'G' cell spawns DMLab's visible `goal` pickup.
+-- With goalVisible=false the pickup keeps its GOAL type, reward and collision box (pickup
+-- collision is the engine's fixed item bounding box, not the model) but is drawn with a
+-- zero-area model, so the agent can only find it by touching it. Default true (the original
+-- behaviour) until the switch is decided -- see docs/paper/deviations.md, item I.
+api._goalVisible = true
+
+function api:init(params)
+  if params.goalVisible ~= nil then
+    api._goalVisible = params.goalVisible ~= 'false'
+  end
+end
+
+local INVISIBLE_MODEL = 'invisible_goal_model'
+
+function api:createModel(modelName)
+  if modelName == INVISIBLE_MODEL then
+    return {
+        surfaces = {
+            empty = {
+                vertices = tensor.FloatTensor{
+                    {0, 0, -1000, 0, 0, 1, 0, 0},
+                    {0, 0, -1000, 0, 0, 1, 0, 0},
+                    {0, 0, -1000, 0, 0, 1, 0, 0},
+                },
+                indices = tensor.Int32Tensor{{1, 2, 3}},
+                shaderName = 'textures/model/beam_d',
+            },
+        },
+    }
+  end
+end
 
 -- True episode boundary (~90s, per timeout.decorate below): the goal/cue positions and the
 -- floor/wall texture all change here, together, matching Methods' "changed each episode" list
@@ -207,7 +243,12 @@ function api:nextMap()
 end
 
 function api:createPickup(className)
-  return pickups.defaults[className]
+  local pickup = pickups.defaults[className]
+  if className == 'goal' and not api._goalVisible then
+    pickup = {name = pickup.name, classname = pickup.classname, model = INVISIBLE_MODEL,
+              quantity = pickup.quantity, type = pickup.type}
+  end
+  return pickup
 end
 
 function api:updateSpawnVars(spawnVars)
