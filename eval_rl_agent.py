@@ -240,10 +240,13 @@ def main():
                              "scores, as in the paper)")
     parser.add_argument("--first-seed", type=int, default=0)
     parser.add_argument("--hidden-goal", action="store_true")
+    parser.add_argument("--level", default=None)
     args = parser.parse_args()
 
     t_start = time.time()
     cfg = Config()
+    if args.level:
+        cfg.rl.env.level = args.level
 
     if args.checkpoint:
         ckpt_path = args.checkpoint
