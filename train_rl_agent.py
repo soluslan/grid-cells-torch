@@ -35,7 +35,7 @@ def parse_args():
     p.add_argument("--lr", type=float, default=None,
                    help="actor-critic learning rate (default: midpoint of Table 2's range)")
     p.add_argument("--ac-momentum", type=float, default=None,
-                   help="actor-critic RMSProp momentum (default: Table 2's 0.99, read as momentum)")
+                   help="actor-critic RMSProp momentum (default 0; 0.99 reproduces reading Table 2's "gradient momentum" as momentum, which collapsed the policy)")
     p.add_argument("--ac-eps", type=float, default=None, help="actor-critic RMSProp epsilon")
     p.add_argument("--entropy-cost", type=float, default=None,
                    help="entropy regularisation beta (default: midpoint of Table 2's range)")

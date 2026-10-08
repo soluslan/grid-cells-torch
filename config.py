@@ -110,7 +110,7 @@ class A2CConfig:
     ac_grad_clip_norm: float | None = None
     ac_rmsprop_alpha: float = 0.99
     ac_rmsprop_eps: float = 1e-8
-    ac_rmsprop_momentum: float | None = None
+    ac_rmsprop_momentum: float | None = 0.0
     checkpoint_every_frames: int = 10_000_000
     renderer: str = "hardware"
 
