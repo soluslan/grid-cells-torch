@@ -34,3 +34,8 @@ __pycache__/
 
 # Editor config -- recommends an extension, not needed to run anything
 .vscode/
+
+# Paper files: local copies only, not redistributed (see docs/paper/README.md)
+docs/paper/*.pdf
+docs/paper/figures/
+docs/paper/text/
