@@ -62,20 +62,23 @@ def actor_worker(
     ac_optimizer: SharedRMSprop,
     frame_buffer: FrameReplayBuffer, seq_buffer: SequenceReplayBuffer,
     place_ensemble, hd_ensemble,
-    step_counter, stop_flag,
+    step_counter, stop_flag, env_factory=None,
 ) -> None:
     _cap_thread_pools()
-    import deepmind_lab
 
     torch.manual_seed(cfg.rl.seed + rank)
     env_cfg = cfg.rl.env
-    level_dir = os.path.abspath(env_cfg.level_directory)
-    env = deepmind_lab.Lab(
-        env_cfg.level,
-        ["RGB_INTERLEAVED", "VEL.TRANS", "VEL.ROT", "DEBUG.POS.TRANS", "DEBUG.POS.ROT"],
-        config={"width": str(env_cfg.width), "height": str(env_cfg.height),
-                "levelDirectory": level_dir},
-    )
+    if env_factory is None:
+        import deepmind_lab
+        level_dir = os.path.abspath(env_cfg.level_directory)
+        env = deepmind_lab.Lab(
+            env_cfg.level,
+            ["RGB_INTERLEAVED", "VEL.TRANS", "VEL.ROT", "DEBUG.POS.TRANS", "DEBUG.POS.ROT"],
+            config={"width": str(env_cfg.width), "height": str(env_cfg.height),
+                    "levelDirectory": level_dir},
+        )
+    else:
+        env = env_factory()
     seq_acc = SequenceAccumulator(seq_buffer)
 
     def observe():
