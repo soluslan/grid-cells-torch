@@ -62,15 +62,24 @@ Updated: 2026-10-08
 - Diagnostic, momentum 0 (only change), 3e6 frames: entropy stayed 1.4–1.6, reward per episode
   17.5 → 28.7 → 35.7 → 48.0 → 46.9 → 46.8 per 0.5M frames (~2.7x random by 1.5M, then flat).
   Momentum 0 is now the A2C default (deviations.md).
+- Phase 7 gate, attempt 2 (momentum 0, lr 1e-4, 1e7 frames, `gate_tiny_goal_v2`): **not passed**.
+  Reward per 1M frames: 30 → 48 → 49 → 56 → 56 → 55 → 57 → 51 → 57 → 56. Entropy 1.1–1.5 (no
+  collapse), still fraction 0.3–0.6. Learns to ~3.2x random by 3e6 frames, then flat for 7e6.
+  Eval of the final checkpoint at native 64 px: 0 / 100 / 30 over seeds 0–2.
+- Diagnostic lr 2e-4 (Table 2 upper end), 3.5e6 frames: same plateau (~55–60) reached faster
+  (45 at 0.5M vs 29). Learning rate is not what caps performance.
+- Bandit test still passes with momentum 0.
 - The square-arena goal object turned out to be visible (deviation I); `--hidden-goal` added.
 
-## Next
+## Next (needs the user's decisions)
 
-- Phase 7 gate, attempt 2 running: `data/checkpoints/gate_tiny_goal_v2` (1e7 frames, momentum 0,
-  ~40 min). Pass = reward >= 5x the first-0.5M level (~86), entropy not collapsed, still
-  fraction not saturated. If it plateaus near 47, next suspects in order: lr (Table 2 upper end
-  2e-4), vision mask granularity (F), entropy cost.
-- Re-run the slow bandit test with the new momentum default.
+- Plateau at ~3x random on tiny_goal. Candidate causes not yet tested: (1) not enough frames —
+  A3C-family agents in DMLab usually need several 1e7 frames even for simple tasks; (2) entropy
+  cost (Table 2's 6e-5–1e-4 is tiny next to +10 rewards); (3) vision mask (F); (4) reward scale.
+  Cheapest informative next step: tiny_goal at lr 2e-4 for 3e7 frames (~2 h).
+- Square-arena milestone gates must be re-based: a random policy already scores 5.4, so the old
+  "1e7 frames >= 5" gate is meaningless. Proposed: 1e7 >= 11 (2x random), 5e7 >= 50,
+  1e8 >= 150, 2.5e8 >= 250.
 - Decide visible vs hidden goal before Phase 8.
 
 ## Open questions
