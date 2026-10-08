@@ -14,6 +14,20 @@ class TaskConfig:
 
 
 @dataclass
+class DataGenConfig:
+    duration_s: float = 15.0
+    sim_dt: float = 0.02
+    perimeter_m: float = 0.03
+    speed_rayleigh_scale: float = 0.13
+    rot_vel_std_deg: float = 330.0
+    perimeter_speed_reduction: float = 0.25
+    n_steps: int = 100
+    n_shards: int = 100
+    trajectories_per_shard: int = 10_000
+    seed: int = 0
+
+
+@dataclass
 class ModelConfig:
     nh_lstm: int = 128
     nh_bottleneck: int = 256
@@ -105,6 +119,7 @@ class RLConfig:
 @dataclass
 class Config:
     task: TaskConfig = field(default_factory=TaskConfig)
+    data: DataGenConfig = field(default_factory=DataGenConfig)
     model: ModelConfig = field(default_factory=ModelConfig)
     train: TrainConfig = field(default_factory=TrainConfig)
     rl: RLConfig = field(default_factory=RLConfig)
