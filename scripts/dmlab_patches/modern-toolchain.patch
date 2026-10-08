@@ -1,0 +1,433 @@
+diff --git a/BUILD b/BUILD
+index 771b7e2..cbc199a 100644
+--- a/BUILD
++++ b/BUILD
+@@ -784,7 +784,12 @@ genrule(
+         CODE_DIR + "/q3_ui/ui.qvm",
+     ],
+     outs = ["baselab/vm.pk3"],
+-    cmd = "A=$$(pwd); mkdir $(@D)/vm; ln -s -r -t $(@D)/vm -- $(SRCS); (cd $(@D); zip --quiet -r $${A}/$(OUTS) -- vm)",
++    # mkdir -p / ln -sf, not mkdir / ln -s: with --spawn_strategy=local (required in this
++    # container -- no user namespaces for sandboxing), genrules run directly in the real output
++    # tree instead of a fresh sandbox, so a leftover baselab/vm/ and its symlinks from an
++    # earlier build of this same genrule (e.g. while building the deepmind_lab.so pip package)
++    # make a second run's plain `mkdir`/`ln -s` fail outright on the "already exists" case.
++    cmd = "A=$$(pwd); mkdir -p $(@D)/vm; ln -s -f -r -t $(@D)/vm -- $(SRCS); (cd $(@D); zip --quiet -r $${A}/$(OUTS) -- vm)",
+     visibility = ["//testing:__subpackages__"],
+ )
+ 
+diff --git a/WORKSPACE b/WORKSPACE
+index a68334b..3d4325a 100644
+--- a/WORKSPACE
++++ b/WORKSPACE
+@@ -17,8 +17,8 @@ http_archive(
+ 
+ http_archive(
+     name = "com_google_absl",
+-    strip_prefix = "abseil-cpp-master",
+-    urls = ["https://github.com/abseil/abseil-cpp/archive/master.zip"],
++    strip_prefix = "abseil-cpp-20230802.1",
++    urls = ["https://github.com/abseil/abseil-cpp/archive/refs/tags/20230802.1.zip"],
+ )
+ 
+ http_archive(
+@@ -49,23 +49,19 @@ http_archive(
+ http_archive(
+     name = "eigen_archive",
+     build_file = "@//bazel:eigen.BUILD",
+-    sha256 = "9a01fed6311df359f3f9af119fcf298a3353aef7d1b1bc86f6c8ae0ca6a2f842",
+-    strip_prefix = "/eigen-eigen-5d5dd50b2eb6",
++    strip_prefix = "eigen-3.4.0",
+     urls = [
+-        "https://mirror.bazel.build/bitbucket.org/eigen/eigen/get/5d5dd50b2eb6.zip",
+-        "https://bitbucket.org/eigen/eigen/get/5d5dd50b2eb6.zip",
++        "https://gitlab.com/libeigen/eigen/-/archive/3.4.0/eigen-3.4.0.tar.gz",
+     ],
+ )
+ 
+-http_archive(
++# Uses the system's glib development package (installed via apt) rather than
++# vendoring & autoconf-building glib-2.55.1 from source, which fails to
++# configure in this environment ("cannot run C compiled programs").
++new_local_repository(
+     name = "glib_archive",
+     build_file = "@//bazel:glib.BUILD",
+-    sha256 = "0cbb3d31c9d181bbcc97cba3d9dbe3250f75e2da25e5f7c8bf5a993fe54baf6a",
+-    strip_prefix = "glib-2.55.1",
+-    urls = [
+-        "https://mirror.bazel.build/ftp.gnome.org/pub/gnome/sources/glib/2.55/glib-2.55.1.tar.xz",
+-        "https://ftp.gnome.org/pub/gnome/sources/glib/2.55/glib-2.55.1.tar.xz",
+-    ],
++    path = "/usr",
+ )
+ 
+ http_archive(
+@@ -85,6 +81,16 @@ http_archive(
+         "https://mirror.bazel.build/xmlsoft.org/sources/libxml2-2.9.7.tar.gz",
+         "http://xmlsoft.org/sources/libxml2-2.9.7.tar.gz",
+     ],
++    # The shipped include/libxml/xmlversion.h has LIBXML_LZMA_ENABLED
++    # #defined regardless of ./configure --without-lzma (a mismatch between
++    # it and config.h's correctly-unset HAVE_LIBLZMA/HAVE_LZMA_H). The
++    # BUILD's own genrule regenerates a fixed copy, but the compiler's
++    # include search still finds this original first, so patch it here at
++    # fetch time -- a genrule can't durably mutate the persistent extracted
++    # source, only produce new declared outputs.
++    patch_cmds = [
++        "sed -i -e '/#define LIBXML_LZMA_ENABLED/d' include/libxml/xmlversion.h",
++    ],
+ )
+ 
+ http_archive(
+diff --git a/bazel/glib.BUILD b/bazel/glib.BUILD
+index a817d00..2079c45 100644
+--- a/bazel/glib.BUILD
++++ b/bazel/glib.BUILD
+@@ -1,246 +1,19 @@
+-genrule(
+-    name = "gen_configure",
+-    srcs = [
+-        "configure",
+-        "config.guess",
+-        "config.sub",
+-        "install-sh",
+-        "ltmain.sh",
+-        "missing",
+-        "glib/glib.h",
+-        "po/LINGUAS",
+-    ] + glob(["**/*.in"]),
+-    outs = [
+-        "config.h",
+-        "glibconfig.h",
+-    ],
+-    cmd = "./$(location configure) --silent --disable-fam --disable-libmount --disable-dtrace --disable-compile-warnings --with-pcre=internal " +
+-          "&& cp --verbose -- config.h $(location config.h)" +
+-          "&& cp --verbose -- glib/glibconfig.h $(location glibconfig.h)",
+-)
+-
+-cc_library(
+-    name = "charset",
+-    srcs = [
+-        "config.h",
+-        "glib/libcharset/localcharset.c",
+-    ],
+-    hdrs = ["glib/libcharset/localcharset.h"],
+-    copts = [
+-        "-DHAVE_CONFIG_H",
+-        "-DLIBDIR='\"/nonexistent\"'",
+-    ],
+-)
++# Description:
++#   Build rule for GLib, using the system-installed development package
++#   instead of vendoring & autoconf-building an old glib source snapshot
++#   (which fails to configure in this environment).
++#   Compiler and linker flags found with `pkg-config --cflags --libs glib-2.0`.
+ 
+ cc_library(
+     name = "glib",
+-    srcs = [
+-        "glib/deprecated/gallocator.c",
+-        "glib/deprecated/gcache.c",
+-        "glib/deprecated/gcompletion.c",
+-        "glib/deprecated/grel.c",
+-        "glib/deprecated/gthread.h",
+-        "glib/deprecated/gthread-deprecated.c",
+-        "glib/garray.c",
+-        "glib/gasyncqueue.c",
+-        "glib/gasyncqueueprivate.h",
+-        "glib/gatomic.c",
+-        "glib/gbacktrace.c",
+-        "glib/gbase64.c",
+-        "glib/gbitlock.c",
+-        "glib/gbookmarkfile.c",
+-        "glib/gbytes.c",
+-        "glib/gcharset.c",
+-        "glib/gcharsetprivate.h",
+-        "glib/gchecksum.c",
+-        "glib/gconvert.c",
+-        "glib/gdataset.c",
+-        "glib/gdatasetprivate.h",
+-        "glib/gdate.c",
+-        "glib/gdatetime.c",
+-        "glib/gdir.c",
+-        "glib/genviron.c",
+-        "glib/gerror.c",
+-        "glib/gfileutils.c",
+-        "glib/ggettext.c",
+-        "glib/ghash.c",
+-        "glib/ghmac.c",
+-        "glib/ghook.c",
+-        "glib/ghostutils.c",
+-        "glib/giochannel.c",
+-        "glib/giounix.c",
+-        "glib/gkeyfile.c",
+-        "glib/glib-autocleanups.h",
+-        "glib/glib-init.c",
+-        "glib/glib-init.h",
+-        "glib/glib-private.c",
+-        "glib/glib-unix.c",
+-        "glib/glist.c",
+-        "glib/gmain.c",
+-        "glib/gmain-internal.h",
+-        "glib/gmappedfile.c",
+-        "glib/gmarkup.c",
+-        "glib/gmem.c",
+-        "glib/gmessages.c",
+-        "glib/gnode.c",
+-        "glib/goption.c",
+-        "glib/gpattern.c",
+-        "glib/gpoll.c",
+-        "glib/gprimes.c",
+-        "glib/gprintf.c",
+-        "glib/gqsort.c",
+-        "glib/gquark.c",
+-        "glib/gqueue.c",
+-        "glib/grand.c",
+-        "glib/gregex.c",
+-        "glib/gscanner.c",
+-        "glib/gsequence.c",
+-        "glib/gshell.c",
+-        "glib/gslice.c",
+-        "glib/gslist.c",
+-        "glib/gspawn.c",
+-        "glib/gstdio.c",
+-        "glib/gstdioprivate.h",
+-        "glib/gstrfuncs.c",
+-        "glib/gstring.c",
+-        "glib/gstringchunk.c",
+-        "glib/gtestutils.c",
+-        "glib/gthread.c",
+-        "glib/gthread-posix.c",
+-        "glib/gthreadpool.c",
+-        "glib/gthreadprivate.h",
+-        "glib/gtimer.c",
+-        "glib/gtimezone.c",
+-        "glib/gtranslit.c",
+-        "glib/gtranslit-data.h",
+-        "glib/gtrashstack.c",
+-        "glib/gtree.c",
+-        "glib/gunibreak.c",
+-        "glib/gunibreak.h",
+-        "glib/gunicodeprivate.h",
+-        "glib/gunicollate.c",
+-        "glib/gunidecomp.c",
+-        "glib/gunidecomp.h",
+-        "glib/guniprop.c",
+-        "glib/gurifuncs.c",
+-        "glib/gutf8.c",
+-        "glib/gutils.c",
+-        "glib/guuid.h",
+-        "glib/gvariant.c",
+-        "glib/gvariant-core.c",
+-        "glib/gvariant-core.h",
+-        "glib/gvariant-internal.h",
+-        "glib/gvariant-parser.c",
+-        "glib/gvariant-serialiser.c",
+-        "glib/gvariant-serialiser.h",
+-        "glib/gvarianttype.c",
+-        "glib/gvarianttypeinfo.c",
+-        "glib/gvarianttypeinfo.h",
+-        "glib/gversion.c",
+-        "glib/gwakeup.c",
+-        "glib/gwakeup.h",
+-        "glib/libcharset/libcharset.h",
+-        "glib/pcre/pcre.h",
+-    ],
+-    hdrs = [
+-        "config.h",
+-        "glib/deprecated/gallocator.h",
+-        "glib/deprecated/gcache.h",
+-        "glib/deprecated/gcompletion.h",
+-        "glib/deprecated/gmain.h",
+-        "glib/deprecated/grel.h",
+-        "glib/galloca.h",
+-        "glib/garray.h",
+-        "glib/gasyncqueue.h",
+-        "glib/gatomic.h",
+-        "glib/gbacktrace.h",
+-        "glib/gbase64.h",
+-        "glib/gbitlock.h",
+-        "glib/gbookmarkfile.h",
+-        "glib/gbytes.h",
+-        "glib/gcharset.h",
+-        "glib/gchecksum.h",
+-        "glib/gconstructor.h",
+-        "glib/gconvert.h",
+-        "glib/gdataset.h",
+-        "glib/gdate.h",
+-        "glib/gdatetime.h",
+-        "glib/gdir.h",
+-        "glib/genviron.h",
+-        "glib/gerror.h",
+-        "glib/gfileutils.h",
+-        "glib/ggettext.h",
+-        "glib/ghash.h",
+-        "glib/ghmac.h",
+-        "glib/ghook.h",
+-        "glib/ghostutils.h",
+-        "glib/giochannel.h",
+-        "glib/gkeyfile.h",
+-        "glib/glib.h",
+-        "glib/glib-private.h",
+-        "glib/glib-unix.h",
+-        "glib/glib_trace.h",
+-        "glib/glibintl.h",
+-        "glib/glist.h",
+-        "glib/gmacros.h",
+-        "glib/gmain.h",
+-        "glib/gmappedfile.h",
+-        "glib/gmarkup.h",
+-        "glib/gmem.h",
+-        "glib/gmessages.h",
+-        "glib/gmirroringtable.h",
+-        "glib/gnode.h",
+-        "glib/goption.h",
+-        "glib/gpattern.h",
+-        "glib/gpoll.h",
+-        "glib/gprimes.h",
+-        "glib/gprintf.h",
+-        "glib/gprintfint.h",
+-        "glib/gqsort.h",
+-        "glib/gquark.h",
+-        "glib/gqueue.h",
+-        "glib/grand.h",
+-        "glib/gregex.h",
+-        "glib/gscanner.h",
+-        "glib/gscripttable.h",
+-        "glib/gsequence.h",
+-        "glib/gshell.h",
+-        "glib/gslice.h",
+-        "glib/gslist.h",
+-        "glib/gspawn.h",
+-        "glib/gstdio.h",
+-        "glib/gstrfuncs.h",
+-        "glib/gstring.h",
+-        "glib/gstringchunk.h",
+-        "glib/gtestutils.h",
+-        "glib/gthread.h",
+-        "glib/gthreadpool.h",
+-        "glib/gtimer.h",
+-        "glib/gtimezone.h",
+-        "glib/gtrashstack.h",
+-        "glib/gtree.h",
+-        "glib/gtypes.h",
+-        "glib/gunichartables.h",
+-        "glib/gunicode.h",
+-        "glib/gunicomp.h",
+-        "glib/gurifuncs.h",
+-        "glib/gutils.h",
+-        "glib/gvariant.h",
+-        "glib/gvarianttype.h",
+-        "glib/gversion.h",
+-        "glib/gversionmacros.h",
+-        "glib/valgrind.h",
+-        "glibconfig.h",
+-    ],
+-    copts = [
+-        "-Iexternal/glib_archive/glib",
+-        "-DGLIB_COMPILATION",
+-        "-DG_DISABLE_CAST_CHECKS",
+-        "-DG_LOG_DOMAIN='\"GLib\"'",
+-        "-DHAVE_CONFIG_H",
+-        "-DPCRE_STATIC",
++    hdrs = glob([
++        "include/glib-2.0/**/*.h",
++        "lib/x86_64-linux-gnu/glib-2.0/include/*.h",
++    ]),
++    includes = [
++        "include/glib-2.0",
++        "lib/x86_64-linux-gnu/glib-2.0/include",
+     ],
+-    includes = ["."],
++    linkopts = ["-lglib-2.0"],
+     visibility = ["//visibility:public"],
+-    deps = [":charset"],
+ )
+diff --git a/bazel/libxml.BUILD b/bazel/libxml.BUILD
+index cf2dcd3..f416685 100644
+--- a/bazel/libxml.BUILD
++++ b/bazel/libxml.BUILD
+@@ -82,7 +82,9 @@ cc_library(
+         "xmlwriter.c",
+         "xpath.c",
+         "xpointer.c",
+-        "xzlib.c",
++        # xzlib.c requires liblzma, which isn't available; configure is
++        # already passed --without-lzma above, matching upstream's own
++        # Makefile.am (xzlib.c is only built `if WITH_LZMA`).
+     ],
+     hdrs = [
+         "config.h",
+diff --git a/python/pip_package/__init__.py b/python/pip_package/__init__.py
+index a0ecfe3..0ecac17 100644
+--- a/python/pip_package/__init__.py
++++ b/python/pip_package/__init__.py
+@@ -21,11 +21,34 @@ is accessible this way. Use the module as follows:
+   # ...
+ """
+ 
+-import imp
++import os
++import sys
++import importlib.util
+ from deepmind_lab import dmenv_module
+-import pkg_resources
+ 
+-_deepmind_lab = imp.load_dynamic(
+-    __name__, pkg_resources.resource_filename(__name__, 'deepmind_lab.so'))
+-
+-Lab = _deepmind_lab.Lab  # needed from within dmenv_module
++# imp.load_dynamic (removed in Python 3.12) used to both load the compiled
++# extension AND install it into sys.modules[name]. That second part matters
++# here: dmlab_module.c's Lab.__init__ looks itself up at call time via
++# PyImport_AddModule("deepmind_lab") to recover its own per-module state
++# (in particular the runfiles path set below). If sys.modules['deepmind_lab']
++# is left pointing at this wrapper package instead of the loaded extension,
++# that self-lookup finds the wrong object and Lab() fails with
++# "Require runfiles_directory!" even after calling set_runfiles_path. So the
++# extension module must be installed under the 'deepmind_lab' name itself,
++# not kept as a private attribute of the wrapper package.
++#
++# pkg_resources.resource_filename (setuptools) was used here originally, but
++# setuptools 80+ dropped pkg_resources entirely -- this package is never
++# installed as a zipped egg, so a plain filesystem join is equivalent and
++# has no dependency on setuptools being importable at runtime.
++_so_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'deepmind_lab.so')
++_spec = importlib.util.spec_from_file_location('deepmind_lab', _so_path)
++_deepmind_lab = importlib.util.module_from_spec(_spec)
++sys.modules['deepmind_lab'] = _deepmind_lab
++_spec.loader.exec_module(_deepmind_lab)
++
++# Re-attach the pieces this wrapper package normally provides, now as
++# attributes of the extension module that has taken over the 'deepmind_lab'
++# name in sys.modules.
++_deepmind_lab.dmenv_module = dmenv_module
++_deepmind_lab.set_runfiles_path(os.path.dirname(os.path.abspath(__file__)))
+diff --git a/.bazelrc b/.bazelrc
+new file mode 100644
+index 0000000..b4aec12
+--- /dev/null
++++ b/.bazelrc
+@@ -0,0 +1,15 @@
++# Local build fixes for this environment (GCC 15 / Ubuntu 26.04, container as
++# root -- no sandbox namespaces). See WORKSPACE / bazel/*.BUILD comments for
++# why each dependency version was pinned or swapped.
++build --spawn_strategy=local
++build --copt=-std=gnu11
++build --host_copt=-std=gnu11
++# GCC 14+ promoted these from warnings to hard errors by default; the
++# vendored C code (q3map2/picomodel, etc.) predates that and is otherwise
++# harmless here.
++build --copt=-Wno-error=incompatible-pointer-types
++build --host_copt=-Wno-error=incompatible-pointer-types
++build --copt=-Wno-error=implicit-function-declaration
++build --host_copt=-Wno-error=implicit-function-declaration
++build --copt=-Wno-error=int-conversion
++build --host_copt=-Wno-error=int-conversion
+diff --git a/.bazelversion b/.bazelversion
+new file mode 100644
+index 0000000..f22d756
+--- /dev/null
++++ b/.bazelversion
+@@ -0,0 +1 @@
++6.5.0

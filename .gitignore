@@ -4,13 +4,17 @@
 # data/ (a note, a manifest) still gets tracked. Add a line here when a new
 # large artefact appears; see README "Where things live".
 
-# Trajectory CSVs (~17GB) -- regenerate via notebooks/00_make_dataset.ipynb
+# Legacy trajectory CSVs (~17GB) from the removed notebook pipeline
 data/square_room_100steps_2.2m_1000000/
 
-# Converted training shards (~2.3GB) -- regenerate via notebooks/01_prepare_data.ipynb
+# Training shards (~2.3GB) -- regenerate with generate_data.py. data/shards/ is the
+# legacy location (bit-identical to generate_data.py's output); data/datasets/ and
+# the data/latest symlink are where generate_data.py writes.
 data/shards/
+data/datasets/
+data/latest
 
-# Model weights. Supervised runs (~45MB, notebooks/02_train.ipynb) are small;
+# Model weights. Supervised runs (~45MB, train.py) are small;
 # RL runs (train_rl_agent.py) are not -- a single full checkpoint (weights +
 # optimizer + both replay buffers) is ~19.7GB, and only the most recent one is
 # worth keeping (see README "RL agent").
@@ -28,6 +32,9 @@ __pycache__/
 
 # Jupyter
 .ipynb_checkpoints/
+
+# pytest
+.pytest_cache/
 
 # OS
 .DS_Store

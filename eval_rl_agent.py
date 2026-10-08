@@ -1,8 +1,12 @@
-"""Runs the latest RL checkpoint for 5 episodes (different seeds -> different goal/spawn/
-texture/cue configurations of square_arena) and saves, per episode: a first-person mp4,
-a top-down animated mp4, and a paper Fig. 2h-style static trajectory PNG.
+"""Run an RL checkpoint for a few episodes and save, per episode, a first-person mp4 with a HUD,
+a top-down animated mp4, and a paper Fig. 2h-style trajectory PNG.
 
-Run from grid-cells-torch/: python3 eval_episode_diversity.py
+Each episode uses a different seed, so goal, spawn, textures and cue position differ.
+
+Examples:
+    python eval_rl_agent.py                                   # newest checkpoint in --checkpoint-dir
+    python eval_rl_agent.py --checkpoint data/checkpoints/rl_baseline/checkpoint_step199832848.pt
+    python eval_rl_agent.py --episodes 2 --out-dir /tmp/eval
 """
 import argparse
 import glob
@@ -224,6 +228,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--checkpoint", default=None,
                          help="checkpoint_step*.pt path; omit to auto-pick the newest one")
+    parser.add_argument("--checkpoint-dir", default=CHECKPOINT_DIR)
     parser.add_argument("--episodes", type=int, default=N_EPISODES)
     parser.add_argument("--out-dir", default=None)
     args = parser.parse_args()
@@ -235,8 +240,8 @@ def main():
         ckpt_path = args.checkpoint
         ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
     else:
-        print(f"scanning {CHECKPOINT_DIR} for the newest checkpoint_step*.pt ...")
-        ckpt_path, ckpt = find_latest_checkpoint(CHECKPOINT_DIR)
+        print(f"scanning {args.checkpoint_dir} for the newest checkpoint_step*.pt ...")
+        ckpt_path, ckpt = find_latest_checkpoint(args.checkpoint_dir)
     step = ckpt["step"]
     print(f"using checkpoint {ckpt_path} (step {step})")
 
