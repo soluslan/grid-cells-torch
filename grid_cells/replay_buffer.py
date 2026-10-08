@@ -1,7 +1,7 @@
 import torch
 import torch.multiprocessing as mp
 
-from dataset import FIELDS
+from grid_cells.dataset import FIELDS
 
 N_STRIPE_LOCKS = 8
 

@@ -3,12 +3,12 @@ import os
 import numpy as np
 import torch
 
-from ensembles import build_ensembles, encode_initial_conditions
-from scores import (BORDER_BINS, BORDER_THRESHOLD, HD_THRESHOLD, GridScorer,
+from grid_cells.ensembles import build_ensembles, encode_initial_conditions
+from grid_cells.scores import (BORDER_BINS, BORDER_THRESHOLD, HD_THRESHOLD, GridScorer,
                     border_score, cluster_scales, directional_ratemap,
                     discreteness_significance, grid_scale, paper_mask_parameters,
                     ratemap_stability, resultant_vector_length)
-from train import build_model
+from grid_cells.training import build_model
 
 GRIDNESS_THRESHOLD = 0.37
 DECODERS = ("argmax", "weighted_mean", "top3")

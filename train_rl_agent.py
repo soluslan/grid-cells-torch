@@ -30,7 +30,7 @@ import sys
 sys.path.insert(0, ".")
 
 from config import Config
-from rl_train import train_rl_agent
+from grid_cells.rl_a3c import train_rl_agent
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

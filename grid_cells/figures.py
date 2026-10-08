@@ -5,7 +5,7 @@ import numpy as np
 from matplotlib.backends.backend_pdf import PdfPages
 from matplotlib.patches import Rectangle
 
-from scores import circle_mask
+from grid_cells.scores import circle_mask
 
 CMAP = "jet"
 

@@ -12,7 +12,7 @@ sys.path.insert(0, ".")
 import torch
 
 from config import Config
-from rl_train import _save_checkpoint, build_shared_models
+from grid_cells.rl_a3c import _save_checkpoint, build_shared_models
 
 
 def _populate_optimizer_state(models):

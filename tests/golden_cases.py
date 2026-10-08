@@ -11,11 +11,7 @@ SHARD0 = os.path.join(REPO, "data", "shards", "0000-of-0099.npz")
 
 def _modules():
     from config import Config
-    try:
-        from grid_cells import actor_critic, ensembles, model, scores, training, vision
-    except ImportError:
-        import actor_critic, ensembles, model, scores, vision
-        import train as training
+    from grid_cells import actor_critic, ensembles, model, scores, training, vision
     return Config, actor_critic, ensembles, model, scores, training, vision
 
 

@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from ensembles import CellEnsemble
+from grid_cells.ensembles import CellEnsemble
 
 
 @dataclass

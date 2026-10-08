@@ -5,7 +5,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from vision import VisionCNN
+from grid_cells.vision import VisionCNN
 
 N_ACTIONS = 6
 

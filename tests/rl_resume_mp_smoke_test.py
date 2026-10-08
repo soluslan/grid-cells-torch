@@ -17,7 +17,7 @@ os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
 sys.path.insert(0, ".")
 
 from config import Config
-from rl_train import train_rl_agent
+from grid_cells.rl_a3c import train_rl_agent
 
 import torch.multiprocessing as mp
 

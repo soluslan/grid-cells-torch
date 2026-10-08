@@ -23,8 +23,8 @@ from PIL import Image
 
 import deepmind_lab
 from config import Config
-from actor_critic import DISCRETE_ACTIONS
-from rl_train import build_models_from_checkpoint, grid_step_velocity_only, draw_hud, world_to_meters
+from grid_cells.actor_critic import DISCRETE_ACTIONS
+from grid_cells.rl_a3c import build_models_from_checkpoint, grid_step_velocity_only, draw_hud, world_to_meters
 
 CHECKPOINT_DIR = "data/checkpoints/rl_baseline"
 N_EPISODES = 5

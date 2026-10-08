@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from ensembles import CellEnsemble, soft_cross_entropy
+from grid_cells.ensembles import CellEnsemble, soft_cross_entropy
 
 
 @dataclass

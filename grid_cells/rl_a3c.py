@@ -8,13 +8,13 @@ import torch.multiprocessing as mp
 import torch.nn.functional as F
 from PIL import Image, ImageDraw
 
-from actor_critic import ActorCriticLSTM, DISCRETE_ACTIONS, N_ACTIONS
+from grid_cells.actor_critic import ActorCriticLSTM, DISCRETE_ACTIONS, N_ACTIONS
 from config import Config
-from ensembles import HeadDirectionCellEnsemble, PlaceCellEnsemble, build_rl_ensembles
-from model import GridCellsRNN
-from replay_buffer import FrameReplayBuffer, SequenceAccumulator, SequenceReplayBuffer
-from train import build_model, build_optimizer, train_step
-from vision import VisionModule
+from grid_cells.ensembles import HeadDirectionCellEnsemble, PlaceCellEnsemble, build_rl_ensembles
+from grid_cells.model import GridCellsRNN
+from grid_cells.replay_buffer import FrameReplayBuffer, SequenceAccumulator, SequenceReplayBuffer
+from grid_cells.training import build_model, build_optimizer, train_step
+from grid_cells.vision import VisionModule
 
 
 def _cap_thread_pools() -> None:

@@ -4,10 +4,10 @@ import numpy as np
 import torch
 
 from config import Config
-from dataset import build_dataloader, infinite_loader
-from ensembles import (build_ensembles, encode_initial_conditions, encode_targets,
+from grid_cells.dataset import build_dataloader, infinite_loader
+from grid_cells.ensembles import (build_ensembles, encode_initial_conditions, encode_targets,
                        soft_cross_entropy)
-from model import GridCellsRNN
+from grid_cells.model import GridCellsRNN
 
 
 def build_model(cfg: Config, target_ensembles, device, vision_dim: int = 0,
