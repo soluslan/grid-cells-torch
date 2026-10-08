@@ -107,6 +107,9 @@ class A2CConfig:
     reinit_grid_on_goal: bool = False
     grid_train_zero_init: bool = True
     ac_grad_clip_norm: float | None = None
+    ac_rmsprop_alpha: float = 0.99
+    ac_rmsprop_eps: float = 1e-8
+    ac_rmsprop_momentum: float | None = None
     checkpoint_every_frames: int = 10_000_000
     renderer: str = "hardware"
 

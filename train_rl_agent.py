@@ -34,6 +34,11 @@ def parse_args():
     p.add_argument("--seed", type=int, default=None)
     p.add_argument("--lr", type=float, default=None,
                    help="actor-critic learning rate (default: midpoint of Table 2's range)")
+    p.add_argument("--ac-momentum", type=float, default=None,
+                   help="actor-critic RMSProp momentum (default: Table 2's 0.99, read as momentum)")
+    p.add_argument("--ac-eps", type=float, default=None, help="actor-critic RMSProp epsilon")
+    p.add_argument("--entropy-cost", type=float, default=None,
+                   help="entropy regularisation beta (default: midpoint of Table 2's range)")
     p.add_argument("--device", default=None)
     p.add_argument("--renderer", choices=("hardware", "software"), default=None)
     return p.parse_args()
@@ -64,6 +69,12 @@ def main():
     if args.num_envs:
         cfg.rl.a2c.num_envs = args.num_envs
         cfg.rl.env.num_actors = args.num_envs
+    if args.ac_momentum is not None:
+        cfg.rl.a2c.ac_rmsprop_momentum = args.ac_momentum
+    if args.ac_eps is not None:
+        cfg.rl.a2c.ac_rmsprop_eps = args.ac_eps
+    if args.entropy_cost is not None:
+        cfg.rl.actor_critic.entropy_reg_range = (args.entropy_cost, args.entropy_cost)
     if args.device:
         cfg.rl.a2c.device = args.device
     if args.renderer:

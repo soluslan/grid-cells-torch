@@ -329,8 +329,12 @@ def build_agent(cfg, device, checkpoint: dict | None = None, reset_actor_critic:
                          embed_dim=cfg.rl.actor_critic.embed_dim,
                          lstm_units=cfg.rl.actor_critic.lstm_units).to(device)
     ac_cfg = cfg.rl.actor_critic
+    a2c = cfg.rl.a2c
+    momentum = (ac_cfg.gradient_momentum if a2c.ac_rmsprop_momentum is None
+                else a2c.ac_rmsprop_momentum)
     ac_opt = torch.optim.RMSprop(ac.parameters(), lr=sum(ac_cfg.learning_rate_range) / 2,
-                                 alpha=0.99, eps=1e-8, momentum=ac_cfg.gradient_momentum)
+                                 alpha=a2c.ac_rmsprop_alpha, eps=a2c.ac_rmsprop_eps,
+                                 momentum=momentum)
     vision_opt = torch.optim.RMSprop(vision.parameters(), lr=cfg.rl.vision.learning_rate,
                                      alpha=0.99, eps=1e-8)
     grid_opt = build_optimizer(grid, cfg, learning_rate=cfg.rl.grid.learning_rate,

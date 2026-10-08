@@ -85,6 +85,7 @@ legacy loop (`rl_train.py` at `55ef4ea`, later `grid_cells/rl_a3c.py`); "A2C" is
 | E | goal arrival | not an episode end; agent continues (supp p.4) | policy LSTM reset and return cut (bootstrap 0) | episode continues: no reset, bootstrap through |
 | F | vision masking granularity | "5% of the time" vs "zeroed the units with a probability of 95%" (main p.2, p.7) | per-unit | per-unit by default, whole-vector selectable |
 | G | grid replay sequences across teleports | implied by C | cut at teleports | cut only at episode ends |
+| I | goal visibility (square arena) | "an unmarked goal" (main p.6), "navigate to an unmarked goal" (supp p.4) | `levels/square_arena.lua` places the map character `G`, which `common/make_map.lua` turns into the visible `goal` pickup (`models/goal_object_02.md3`) — the goal is a visible object | unchanged so far; open decision (making it invisible needs a position-triggered reward instead of a pickup) |
 | H | initial state of replayed grid sequences | grid LSTM "set to zero", not ground truth (main p.7) | ground-truth place/HD init (`train_step`) | zero state (`grid_train_zero_init`) |
 | — | actor–critic RMSProp | Table 2: "gradient momentum 0.99 — momentum parameter of the shared RMSProp" (decay rate not given) | decay 0.99, momentum 0.99, eps 1e-8 | same (unchanged on purpose; ambiguous, a suspect if learning stalls) |
 | — | vision optimizer | not specified | RMSProp lr 1e-4, decay 0.99 | same |
