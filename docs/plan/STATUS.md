@@ -54,21 +54,24 @@ Updated: 2026-10-08
   Throughput on the GTX 1650 with 32 envs: ~4,600 frames/s (gate: 4,000) → 1e9 frames ≈ 60 h.
   Per rollout (12,800 frames, ~2.8 s): env stepping 1.0 s, batched forward 1.0 s, AC update
   0.5 s, 51 vision updates 0.3 s, 2 grid updates 0.05 s. GPU memory 0.73 GB.
-- Random-policy baselines (uniform over the 6 actions): square_arena ~13 per episode (6 episodes;
-  100-episode run pending), tiny_goal ~17. The 1e9-frame A3C agent (0.93) was far *below* random.
-- Phase 7 gate, first attempt (tiny_goal, Table 2 settings, RMSProp momentum 0.99): **failed**.
-  Policy entropy collapsed from 1.79 to 0.001 within ~600k frames (47 updates) and the agent
-  stopped moving (still fraction 1.00) — the same "freeze" as the A3C run, now with defects A–G
-  fixed. Prime suspect: Table 2's "gradient momentum 0.99" applied as RMSProp *momentum* (on top
-  of decay 0.99), which multiplies the effective step ~100x. Diagnostic: momentum 0
-  (`--ac-momentum 0`), everything else unchanged.
+- Random-policy baselines (uniform over the 6 actions, 100 episodes each): square_arena
+  **5.40** (goal found in 38% of episodes), tiny_goal **17.2** (77%). The 1e9-frame A3C agent
+  (0.93) scored far *below* a random policy.
+- Phase 7 gate, attempt 1 (tiny_goal, RMSProp momentum 0.99): **failed** — entropy 1.79 → 0.001
+  within ~6e5 frames, agent froze (still fraction 1.00): the A3C "freeze" again, with A–G fixed.
+- Diagnostic, momentum 0 (only change), 3e6 frames: entropy stayed 1.4–1.6, reward per episode
+  17.5 → 28.7 → 35.7 → 48.0 → 46.9 → 46.8 per 0.5M frames (~2.7x random by 1.5M, then flat).
+  Momentum 0 is now the A2C default (deviations.md).
+- The square-arena goal object turned out to be visible (deviation I); `--hidden-goal` added.
 
 ## Next
 
-- Read out `data/checkpoints/diag_tiny_mom0` (3e6 frames, momentum 0). If entropy stays healthy
-  and reward rises above the random level, rerun the full tiny_goal gate (1e7 frames) with
-  momentum 0, then decide whether momentum 0 becomes the default (deviations.md entry).
-- Then Phase 8: square_arena from scratch with milestone gates.
+- Phase 7 gate, attempt 2 running: `data/checkpoints/gate_tiny_goal_v2` (1e7 frames, momentum 0,
+  ~40 min). Pass = reward >= 5x the first-0.5M level (~86), entropy not collapsed, still
+  fraction not saturated. If it plateaus near 47, next suspects in order: lr (Table 2 upper end
+  2e-4), vision mask granularity (F), entropy cost.
+- Re-run the slow bandit test with the new momentum default.
+- Decide visible vs hidden goal before Phase 8.
 
 ## Open questions
 
