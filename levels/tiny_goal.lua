@@ -7,6 +7,10 @@ cannot, the bug is in the learner, not in the difficulty of the paper's task.
 
 Same spawn/teleport mechanics as square_arena.lua (fast restart on goal touches, full rebuild
 only at episode start), so the agent-facing interface is identical.
+
+Spawn points keep SPAWN_MARGIN world units from every cell edge: a spawn within the player's
+bounding-box radius (~16 units) of a wall starts inside solid geometry and the agent can never
+move again, which silently ended ~8% of spawn segments early in the first gate runs.
 ]]
 
 local custom_observations = require 'decorators.custom_observations'
@@ -19,6 +23,7 @@ local randomMap = random(map_maker:randomGen())
 
 local GRID = 5
 local EPISODE_LENGTH_SECONDS = 90
+local SPAWN_MARGIN = 25
 
 local function buildLayer(goalRow, goalCol, spawnRow, spawnCol)
   local n = GRID + 2
@@ -71,8 +76,8 @@ end
 
 function api:updateSpawnVars(spawnVars)
   if spawnVars.classname == 'info_player_start' then
-    local x = api._spawnCol * 100 + random:uniformReal(0, 100)
-    local y = api._spawnRow * 100 + random:uniformReal(0, 100)
+    local x = api._spawnCol * 100 + random:uniformReal(SPAWN_MARGIN, 100 - SPAWN_MARGIN)
+    local y = api._spawnRow * 100 + random:uniformReal(SPAWN_MARGIN, 100 - SPAWN_MARGIN)
     spawnVars.origin = string.format('%d %d %d', x, y, 40)
     spawnVars.randomAngleRange = '180'
   end
