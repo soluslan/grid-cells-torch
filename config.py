@@ -14,6 +14,20 @@ class TaskConfig:
 
 
 @dataclass
+class DataGenConfig:
+    duration_s: float = 15.0
+    sim_dt: float = 0.02
+    perimeter_m: float = 0.03
+    speed_rayleigh_scale: float = 0.13
+    rot_vel_std_deg: float = 330.0
+    perimeter_speed_reduction: float = 0.25
+    n_steps: int = 100
+    n_shards: int = 100
+    trajectories_per_shard: int = 10_000
+    seed: int = 0
+
+
+@dataclass
 class ModelConfig:
     nh_lstm: int = 128
     nh_bottleneck: int = 256
@@ -50,6 +64,7 @@ class RLEnvConfig:
     action_repeat: int = 4
     num_actors: int = 32
     velocity_noise_std: float = 0.01
+    goal_visible: bool = True
 
 
 @dataclass
@@ -81,6 +96,26 @@ class ActorCriticConfig:
 
 
 @dataclass
+class A2CConfig:
+    num_envs: int = 32
+    device: str = "cuda"
+    vision_updates_per_rollout: int = 51
+    grid_updates_per_rollout: int = 2
+    replay_frames: int = 400_000
+    vision_mask_mode: str = "per_unit"
+    reset_policy_on_goal: bool = False
+    cut_return_on_goal: bool = False
+    reinit_grid_on_goal: bool = False
+    grid_train_zero_init: bool = True
+    ac_grad_clip_norm: float | None = None
+    ac_rmsprop_alpha: float = 0.99
+    ac_rmsprop_eps: float = 1e-8
+    ac_rmsprop_momentum: float | None = 0.0
+    checkpoint_every_frames: int = 10_000_000
+    renderer: str = "hardware"
+
+
+@dataclass
 class ReplayBufferConfig:
     frame_capacity: int = 200_000
     sequence_capacity: int = 2_000
@@ -93,6 +128,7 @@ class RLConfig:
     grid: GridRLConfig = field(default_factory=GridRLConfig)
     actor_critic: ActorCriticConfig = field(default_factory=ActorCriticConfig)
     replay: ReplayBufferConfig = field(default_factory=ReplayBufferConfig)
+    a2c: A2CConfig = field(default_factory=A2CConfig)
     pc_scale: tuple = (0.4,)
     total_env_steps: int = 1_000_000_000
     seed: int = 0
@@ -105,6 +141,7 @@ class RLConfig:
 @dataclass
 class Config:
     task: TaskConfig = field(default_factory=TaskConfig)
+    data: DataGenConfig = field(default_factory=DataGenConfig)
     model: ModelConfig = field(default_factory=ModelConfig)
     train: TrainConfig = field(default_factory=TrainConfig)
     rl: RLConfig = field(default_factory=RLConfig)
