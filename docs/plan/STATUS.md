@@ -4,7 +4,7 @@ Plan: [`2026-10-goal-finding.md`](2026-10-goal-finding.md) (Korean). This file t
 execution currently stands; update it at the end of every phase and commit it with that
 phase's work.
 
-Updated: 2026-10-08
+Updated: 2026-10-27
 
 ## Phases
 
@@ -15,8 +15,8 @@ Updated: 2026-10-08
 - [x] 4 direct simulator -> npz data path
 - [x] 5 KAT + wiring tests, A3C red lights confirmed
 - [x] 6 A2C implementation
-- [ ] 7 gates: toy env, tiny_goal
-- [ ] 8 square-arena training with milestone gates
+- [x] 7 gates: toy env, tiny_goal (passed 2026-10-09 after the spawn fix)
+- [x] 8 square-arena training, full 1e9 frames (finished 2026-10-14)
 - [ ] 9 gridness shortfall investigation (parallel)
 - [ ] 10 comparison with the paper
 
@@ -28,6 +28,9 @@ Updated: 2026-10-08
   separately; Supplementary 3c defines the n-step return with `γ^n V(s_{t+n})`).
 - 2026-10-08: lab-account switch deferred until SSH/direct access is available (currently
   Remote Control only).
+- 2026-10-09: the square-arena goal is drawn invisibly (`--hidden-goal`) for all
+  paper comparisons; a visible goal would let the policy CNN bypass the grid code
+  (deviations.md, item I).
 - 2026-10-08: notebooks are deleted after conversion to CLI scripts; notebook 06 becomes
   `scripts/setup_dmlab.sh`. The uncommitted notebook diffs (01/03/04/05) were only output-path
   strings (`/home/user` -> `/home/junoLee`), nothing to carry over.
@@ -71,21 +74,35 @@ Updated: 2026-10-08
 - Bandit test still passes with momentum 0.
 - The square-arena goal object turned out to be visible (deviation I); `--hidden-goal` added.
 
-## Next (needs the user's decisions)
+- Phase 7: the first two gate attempts stalled at ~55 on tiny_goal. The cause was the level,
+  not the learner: spawn points could land inside wall geometry (within the player's ~16-unit
+  collision radius), freezing the agent for the rest of the episode — about 8% of spawn
+  segments. With the spawn margin fixed (`levels/tiny_goal.lua`, commit 974714a) and nothing
+  else changed, the score went 55 -> 113 against a random-policy baseline of 22.6, passing the
+  5x gate. `tests/test_levels.py` pins the clearance.
+- Phase 8: square arena with `--hidden-goal`, from scratch, **completed the full 1e9 frames**
+  on 2026-10-14 (`data/checkpoints/a2c_square_hidden/checkpoint_step1000000000_final.pt`,
+  185,184 episodes, ~4,500 frames/s at the end). Mean episode reward per 100M frames:
 
-- Plateau at ~3x random on tiny_goal. Candidate causes not yet tested: (1) not enough frames —
-  A3C-family agents in DMLab usually need several 1e7 frames even for simple tasks; (2) entropy
-  cost (Table 2's 6e-5–1e-4 is tiny next to +10 rewards); (3) vision mask (F); (4) reward scale.
-  Cheapest informative next step: tiny_goal at lr 2e-4 for 3e7 frames (~2 h).
-- Square-arena milestone gates must be re-based: a random policy already scores 5.4, so the old
-  "1e7 frames >= 5" gate is meaningless. Proposed: 1e7 >= 11 (2x random), 5e7 >= 50,
-  1e8 >= 150, 2.5e8 >= 250.
-- Decide visible vs hidden goal before Phase 8.
+  | frames | 100M | 200M | 300M | 400M | 500M | 600M | 700M | 800M | 900M | 1000M |
+  |---|---|---|---|---|---|---|---|---|---|---|
+  | reward | 38 | **81** | 28 | 27 | 27 | 28 | 30 | 30 | 31 | 31 |
+
+  The agent learns — unlike the frozen A3C loop, which never left 0.9 — but performance peaked
+  around 2e8 frames (85.0 mean, 8.45 goals/episode) and fell to ~30 (32.5 mean, 3.24
+  goals/episode) for the remaining 8e8 without recovering. Four earlier dips between 6e7 and
+  1.2e8 did recover on their own; the fifth did not. Random policy on the same level: 5.40.
+  Paper: 289.
+
+## Next
+
+- **Explain the collapse at ~2e8 frames** (see Results). Nothing in the logs identifies a
+  cause yet; entropy did not collapse and the still-fraction stayed low. This blocks any
+  claim about final performance and is the first thing to investigate.
+- Phase 9 (gridness shortfall) and Phase 10 (comparison with the paper) are untouched.
+- Codebase study sessions by region are planned; see `docs/study/` once it exists.
 
 ## Open questions
-
-- The square-arena goal is a visible object in our level; the paper's is unmarked (deviation I).
-  Making it invisible needs a position-triggered reward. Decide before Phase 8.
 
 - Commit paper PDFs to the public repo or not (default: no).
 - Delete `data/square_room_100steps_2.2m_1000000/` (17GB CSV) after Phase 4 verification?

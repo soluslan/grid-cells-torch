@@ -167,3 +167,30 @@ and the learner-update ratios are recorded in
 [`docs/plan/baseline-a3c.md`](docs/plan/baseline-a3c.md). The A3C loop is kept frozen in
 `grid_cells/rl_a3c.py` as the baseline; the replacement is a synchronous GPU (A2C) learner
 (plan: [`docs/plan/2026-10-goal-finding.md`](docs/plan/2026-10-goal-finding.md)).
+
+### RL agent — A2C, full 1e9-frame run (finished 2026-10-14)
+
+Square arena with the paper's unmarked goal (`--hidden-goal`), trained from scratch after the
+restructure. 185,184 episodes, ~4,500 frames/s, checkpoint
+`data/checkpoints/a2c_square_hidden/checkpoint_step1000000000_final.pt`.
+
+| frames | 100M | 200M | 300M | 400M | 500M | 600M | 700M | 800M | 900M | 1000M |
+|---|---|---|---|---|---|---|---|---|---|---|
+| mean episode reward | 38 | **81** | 28 | 27 | 27 | 28 | 30 | 30 | 31 | 31 |
+
+For scale: a random policy scores **5.40** on this level (100 episodes, goal found in 38% of
+them), the frozen A3C agent scored **0.93** after its own 1e9 frames, and the paper reports
+**289**.
+
+So the loop now learns, which the A3C loop never did. But the curve peaked near 2e8 frames
+(85.0 mean, 8.45 goals per episode) and then fell to ~30 (32.5 mean, 3.24 goals per episode)
+for the remaining 8e8 frames without recovering. Policy entropy did not collapse and the
+agent kept moving, so the usual explanations do not fit; the cause is unidentified and is the
+next thing to investigate. Four earlier dips between 6e7 and 1.2e8 recovered on their own.
+
+Three fixes separate this run from the A3C baseline: the n-step return now bootstraps from
+`V(s_t+n)` rather than `V(s_t)`, the policy LSTM actually receives the previous reward, and
+Table 2's "gradient momentum 0.99" is read as the RMSProp decay rate rather than as momentum
+(applied as momentum it inflated every update ~100x and froze the policy within 6e5 frames).
+All three, and six more differences from the paper, are in
+[`docs/paper/deviations.md`](docs/paper/deviations.md).
