@@ -50,7 +50,13 @@ Source: main p.6 ("Grid cell network architecture"), Extended Data Fig. 1 (main 
   (The equation has no bias term.)
 - Linear layer `g_t`: **512** units in the main experiment ("linear layer activations
   `g_t ∈ R^512`"); 256 in the circular-arena setting (inferred: ED Fig. 3e reports 56 grid-like units = 21.9%, i.e. of 256) and in the RL agent (ED Fig. 6a).
-- Dropout 0.5 on each `g_t` unit. No nonlinearity in the decoder.
+- Dropout 0.5 on each `g_t` unit, resampled independently at every time step (main p.1: "50% of
+  the units were randomly silenced at each time step"; main p.6: "drop probability 0.5 was
+  applied to each `g_t` unit"; ref. 16 = Srivastava et al. 2014, standard dropout). The number
+  dropped is therefore Binomial(512, 0.5), not a fixed half. The paper does not say whether
+  dropout was on when ratemaps were generated, or which scaling convention was used; the
+  released code (`grid-cells/model.py:97-104`) and ours (`grid_cells/model.py:106-110`) use
+  inverted dropout during training only. No nonlinearity in the decoder.
 - Two linear + softmax heads from `g_t`: place predictions `y_t`, head-direction predictions `z_t`.
 
 ## Loss and optimisation

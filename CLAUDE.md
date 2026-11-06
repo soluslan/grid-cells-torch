@@ -33,6 +33,7 @@ spec note cites — `grep` the paragraph in `docs/paper/text/main.txt` / `supp.t
 `===== PAGE N =====`), and open the figure image when the spec note or `figures.md` says the image
 matters. Spec notes are summaries and can be wrong; the PDF and figures are ground truth. If the
 paper is silent or ambiguous, say so and record the choice in `docs/paper/deviations.md`.
+Bugs are not deviations; record them in `COMMIT_DRAFT.md` (see below).
 
 If `docs/paper/text/` or the PDFs are missing (they are gitignored), regenerate them as described
 in `docs/paper/README.md`; the originals are in `../supplements/논문/` and `../supplements/figures/`.
@@ -41,6 +42,9 @@ in `docs/paper/README.md`; the originals are in `../supplements/논문/` and `..
 
 - Tests: `pytest -m "not dmlab and not slow"` for the fast suite, `pytest` for everything. A test
   that guards a bug must be seen failing on the buggy code first.
+- Every time you change code or docs, add what changed and why to `COMMIT_DRAFT.md` (repo root,
+  gitignored). When committing, use `git commit -F COMMIT_DRAFT.md`, then empty the file. Format:
+  `docs/maintenance.md`, "Commits".
 - Never start a long training run without written milestone gates (see the plan).
 - `data/` is large and gitignored; never delete anything under `data/checkpoints/` without asking.
 - Python environment: conda `env1` (`/home/junoLee/miniconda3/envs/env1/bin/python`), which has

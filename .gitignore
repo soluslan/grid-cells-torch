@@ -46,3 +46,6 @@ __pycache__/
 docs/paper/*.pdf
 docs/paper/figures/
 docs/paper/text/
+
+# Working commit-message draft (see docs/maintenance.md, "Commits")
+COMMIT_DRAFT.md

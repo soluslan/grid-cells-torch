@@ -30,7 +30,7 @@ Updated: 2026-10-27
   Remote Control only).
 - 2026-10-09: the square-arena goal is drawn invisibly (`--hidden-goal`) for all
   paper comparisons; a visible goal would let the policy CNN bypass the grid code
-  (deviations.md, item I).
+  (deviations.md, row I; the A3C defect is in baseline-a3c.md).
 - 2026-10-08: notebooks are deleted after conversion to CLI scripts; notebook 06 becomes
   `scripts/setup_dmlab.sh`. The uncommitted notebook diffs (01/03/04/05) were only output-path
   strings (`/home/user` -> `/home/junoLee`), nothing to carry over.
@@ -49,7 +49,7 @@ Updated: 2026-10-27
   supervised gridness shortfall (7.8%) is not a scorer failure on clean grids (Phase 9 input).
 - Newly identified while writing the A2C plan: replayed grid sequences in A3C are initialised
   from ground-truth place/HD cells (`train_step`), while the paper sets the grid LSTM to zero
-  (main p.7). A2C trains from a zero state (deviations.md, item H).
+  (main p.7). A2C trains from a zero state (baseline-a3c.md, defect H).
 
 - Phase 6: `grid_cells/rl_a2c.py` + `vec_env.py` + `rl_common.py`. All wiring contracts pass for
   A2C; each paper-violating ablation flag is caught by its contract; A2C learns a bandit with

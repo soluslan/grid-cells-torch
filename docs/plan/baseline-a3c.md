@@ -43,15 +43,25 @@ remaining ~80s, with position and view fixed to the pixel.
 
 ## Defects found in this code (plan §6)
 
-| ID | Location (`rl_train.py` at `55ef4ea`) | Defect |
-|---|---|---|
-| A | line 165 | n-step bootstrap uses `V(s_t)` instead of `V(s_{t+n})` |
-| B | line 108 | reward input to the policy LSTM is never updated, always 0 |
-| C | lines 155–156 | grid LSTM re-initialized on teleport, from the pre-teleport frame's vision output |
-| D | lines 142–145 | goal grid code and previous action not cleared at episode end |
-| E | lines 157, 165 | goal arrival treated as terminal (policy LSTM reset, bootstrap 0) |
-| F | `vision.py` 47–50 | per-unit 95% masking; paper wording is ambiguous |
-| G | `replay_buffer.py` | grid sequences are cut at teleports, so the grid net never sees one |
+All fixed in the A2C loop (`grid_cells/rl_a2c.py`). The A3C loop is left unfixed as the baseline,
+and `tests/test_rl_wiring.py` pins A–E and G as strict xfails. E, F and G are points where the paper
+is silent or ambiguous, so the A2C choice for each is also recorded in
+[`docs/paper/deviations.md`](../paper/deviations.md).
+
+| ID | Location (`rl_train.py` at `55ef4ea`) | Defect | Paper | A2C |
+|---|---|---|---|---|
+| A | line 165 | n-step bootstrap uses `V(s_t)` instead of `V(s_{t+n})` | `γ^n V(s_{t+n})` (supp p.16) | `V(s_{t+n})` from the next observation |
+| B | line 108 | reward input to the policy LSTM is never updated, always 0 | "concatenated with the reward r_t" (main p.7) | previous step's reward |
+| C | lines 155–156 | grid LSTM re-initialized on teleport, from the pre-teleport frame's vision output | grid LSTM "set to zero"; it must "learn how to reset its internal state each time it was teleported" (main p.7) | zero at episode start, not reset at goal teleports |
+| D | lines 142–145 | goal grid code and previous action not cleared at episode end | goal grid code is "zeros if the goal had not yet been reached in the episode" (main p.7) | zeroed at every episode start |
+| E | lines 157, 165 | goal arrival treated as terminal (policy LSTM reset, bootstrap 0) | not an episode end (supp p.4); reset and bootstrap unstated | no reset, bootstrap through |
+| F | `vision.py` 47–50 | per-unit 95% masking; paper wording is ambiguous | "5% of the time" vs "zeroed the units with a probability of 95%" (main p.2, p.7) | per-unit by default, whole-vector selectable |
+| G | `replay_buffer.py` | grid sequences are cut at teleports, so the grid net never sees one | implied by C | cut only at episode ends |
+| H | `train_step` | replayed grid sequences initialised from ground-truth place/HD cells | grid LSTM "set to zero", not ground truth (main p.7) | zero state (`grid_train_zero_init`) |
+| I | `levels/square_arena.lua` | goal drawn as a visible object: map character `G` becomes the `goal` pickup (`models/goal_object_02.md3`) via `common/make_map.lua` | "an unmarked goal" (main p.6, supp p.4) | `--hidden-goal` draws a zero-area goal; `goal_visible` still defaults to True (see `deviations.md`, row I) |
+
+H was found while writing the A2C plan, and I on 2026-10-08 (option added in `63ea05c`, adopted
+2026-10-09), both after this record was frozen.
 
 ## Learner update counts (from the logs, approximate — logs mix several resumes)
 

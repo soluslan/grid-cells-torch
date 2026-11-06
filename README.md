@@ -96,7 +96,7 @@ settling out of its injected init), down to 9.6cm at t=1.80s, then drifting
 up at ~0.49cm/s over the remaining ~13s.
 
 **The representation itself is short, over, or absent relative to the
-paper**, at 256 units against its 21.9% (Ext. Data Fig. 3d) headline:
+paper**, at 256 units against its 21.9% (Ext. Data Fig. 3e) headline:
 
 | measure | ours | paper |
 |---|---|---|
@@ -138,8 +138,8 @@ control and are not recoverable. Treat the specifics below as a documented
 finding to be double-checked, not as reproducible artefacts.*
 
 The first extended RL training run (`data/checkpoints/migration_2026-08-20/`,
-predating every fix listed above) ran to step 429,626,388 of the 1e9-step
-budget (~43%) before being stopped. Inspecting it turned up a genuinely
+predating the bug fixes of commit `3acb425`) ran to step 429,626,388 of the
+1e9-step budget (~43%) before being stopped. Inspecting it turned up a genuinely
 degenerate policy: across recorded episodes, the agent's position was
 confined to exactly 36 discrete values (confirmed by rounding to millimetre
 precision, ruling out "moves a little within a small area") — it rotates in
@@ -153,7 +153,7 @@ were not: goal-code bootstrapping order, advantage collapse, Hogwild gradient
 dilution across 32 concurrent actors, and an uninformative grid signal this
 early in joint vision+grid+policy training. None confirmed.
 
-Several of the fixes above (vision→grid-LSTM wiring, velocity noise, u/v
+Several of those fixes (vision→grid-LSTM wiring, velocity noise, u/v
 velocity, spawn discretization) postdate this run and were partly motivated
 by it, but a fresh run since those fixes has not yet reached a comparable
 step count to say whether the frozen-policy pattern is resolved.
@@ -192,5 +192,6 @@ Three fixes separate this run from the A3C baseline: the n-step return now boots
 `V(s_t+n)` rather than `V(s_t)`, the policy LSTM actually receives the previous reward, and
 Table 2's "gradient momentum 0.99" is read as the RMSProp decay rate rather than as momentum
 (applied as momentum it inflated every update ~100x and froze the policy within 6e5 frames).
-All three, and six more differences from the paper, are in
-[`docs/paper/deviations.md`](docs/paper/deviations.md).
+The first two are A3C defects A and B, recorded with the rest in
+[`docs/plan/baseline-a3c.md`](docs/plan/baseline-a3c.md); the momentum reading and the other
+choices where the paper is silent are in [`docs/paper/deviations.md`](docs/paper/deviations.md).

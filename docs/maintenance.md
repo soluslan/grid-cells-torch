@@ -44,7 +44,8 @@ Conventions for working in this repository. Commands: `bash run_scripts.sh`.
 - `docs/paper/spec-*.md` summarise what the paper specifies, with PDF page citations;
   `docs/paper/figures.md` records what only the images show; `docs/paper/deviations.md` lists
   every departure and every gap we filled. Update `deviations.md` in the same commit as the
-  code that departs.
+  code that departs. Bugs (code that did something other than intended) do not go there; they
+  go in the commit message (see Commits).
 - The PDFs, figure images and text extraction under `docs/paper/` are local, gitignored copies.
 
 ## Plans and status
@@ -52,6 +53,13 @@ Conventions for working in this repository. Commands: `bash run_scripts.sh`.
 - Plans live in `docs/plan/`; `docs/plan/STATUS.md` is the single place that says where work
   stands. Update it at the end of every phase.
 - Long RL runs need written milestone gates before they start (see the plan).
+
+## Commits
+
+- `COMMIT_DRAFT.md` at the repo root (gitignored) is the draft message for the next commit. Each
+  time code or docs change, add what changed and why. The first line is the subject; then a blank
+  line and a bulleted body.
+- Commit with `git commit -F COMMIT_DRAFT.md`, then empty the file.
 
 ## Local environment
 
