@@ -4,7 +4,7 @@ Plan: [`2026-10-goal-finding.md`](2026-10-goal-finding.md) (Korean). This file t
 execution currently stands; update it at the end of every phase and commit it with that
 phase's work.
 
-Updated: 2026-10-27
+Updated: 2026-11-11
 
 ## Phases
 
@@ -22,6 +22,11 @@ Updated: 2026-10-27
 
 ## Decisions made
 
+- 2026-11-11: work moved to a new machine (conda `grid`, CPU only, 15 GB RAM; see
+  `docs/maintenance.md`, "Local environment"). `data/` starts empty here: the Phase 8 run's
+  checkpoint and logs (`data/checkpoints/a2c_square_hidden/`) and the training shards were not
+  carried over. Paper PDFs and figures now live only under `docs/paper/`; the workspace
+  `supplements/` folder is no longer used.
 - 2026-10-08: switch training from A3C (CPU Hogwild) to A2C (GPU, synchronous). A3C code is
   kept frozen as `grid_cells/rl_a3c.py` for baseline reproduction and diagnosis.
 - 2026-10-08: unroll length stays 100, action repeat 4 (Supplementary Table 2, p.24 lists them
@@ -98,12 +103,15 @@ Updated: 2026-10-27
 
 - **Explain the collapse at ~2e8 frames** (see Results). Nothing in the logs identifies a
   cause yet; entropy did not collapse and the still-fraction stayed low. This blocks any
-  claim about final performance and is the first thing to investigate.
+  claim about final performance and is the first thing to investigate. The run's logs and
+  checkpoint are not on the current machine (Decisions, 2026-11-11), so this needs a new run.
 - Phase 9 (gridness shortfall) and Phase 10 (comparison with the paper) are untouched.
 - Codebase study sessions by region are planned; see `docs/study/` once it exists.
 
 ## Open questions
 
 - Commit paper PDFs to the public repo or not (default: no).
-- Delete `data/square_room_100steps_2.2m_1000000/` (17GB CSV) after Phase 4 verification?
-- Delete `lab/build_dmlab.sh` and its two build logs after `scripts/setup_dmlab.sh` absorbs them?
+- `tests/test_golden.py::test_outputs_match_pre_restructure_golden` fails on the current
+  machine (Intel Core Ultra 7, MKL): 9 of 13 recorded outputs differ by float rounding only
+  (max abs 9.5e-7 on `supervised_losses`, ≤ 3e-7 elsewhere). The golden file was recorded on
+  the previous machine's CPU. Re-record it here, or compare with a tight tolerance?

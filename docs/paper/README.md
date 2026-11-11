@@ -44,14 +44,28 @@ code is [google-deepmind/grid-cells](https://github.com/google-deepmind/grid-cel
 | `figures.md` | yes | Per-figure facts that only the image shows, and when to reopen each image |
 | `deviations.md` | yes | Every place this code knowingly differs from the paper or the released code |
 | `banino2018-main.pdf`, `banino2018-supplementary.pdf` | no (gitignored) | Local copies of the paper |
-| `figures/*.png` | no (gitignored) | Figures cropped from the PDFs (`fig1`–`fig4`, `ed-fig1`–`ed-fig10`) |
-| `text/main.txt`, `text/supp.txt` | no (gitignored) | `pypdf` text extraction with `===== PAGE N =====` markers, for `grep` |
+| `figures/*.png` | no (gitignored) | Figure images: `fig1.png`–`fig4.png`, `ed-fig1.png`–`ed-fig10.png` (Extended Data) |
+| `text/main.txt`, `text/supp.txt` | no (gitignored) | Clean transcriptions with `===== PAGE N =====` markers, for `grep` |
 
 Page citations in the notes use **PDF page numbers** (the `PAGE N` markers in `text/*.txt`),
 written `main p.N` / `supp p.N`. The supplementary PDF's printed footer number is one less
 than its PDF page number.
 
-To regenerate the text extraction after placing the PDFs here:
+## Getting the local copies
+
+- **PDFs**: the article and its Supplementary Information from the article page,
+  https://www.nature.com/articles/s41586-018-0102-6 (the article PDF may need institutional
+  access). Save them here under the names in the table above.
+- **Figures**: the figure images linked from the same page (Figs. 1–4 and Extended Data
+  Figs. 1–10), saved as real PNG files (check with `file figures/*`; a browser can save
+  HEIF/WebP data under a `.png` name) and renamed to `figN.png` / `ed-figN.png`.
+  `figures.md` refers to them by these names.
+- **Text**: `text/main.txt` and `text/supp.txt` are hand-cleaned transcriptions (LaTeX math,
+  re-joined hyphenation, conventions in each file's header). Do not regenerate them; the
+  `pypdf` fallback below produces a much rougher extraction and is only for when the
+  transcriptions are lost.
+
+Fallback text extraction (`pip install pypdf` first; overwrites the transcriptions):
 
 ```bash
 python - <<'EOF'

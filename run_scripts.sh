@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Command cheat sheet. Running this file only prints the list; copy the command you need.
-# All commands run from the repo root with the env1 interpreter active
-# (conda activate env1, or prefix with /home/junoLee/miniconda3/envs/env1/bin/).
+# All commands run from the repo root with the grid interpreter active
+# (conda activate grid, or prefix with /home/soluslan/miniconda3/envs/grid/bin/).
 set -euo pipefail
 
 cat <<'CMDS'

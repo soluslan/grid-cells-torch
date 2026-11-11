@@ -63,7 +63,18 @@ Conventions for working in this repository. Commands: `bash run_scripts.sh`.
 
 ## Local environment
 
-- Interpreter: conda `env1` (`/home/junoLee/miniconda3/envs/env1/bin/python`), with CUDA
-  PyTorch, `deepmind_lab` and `pytest`. The system `python3` has neither.
-- Hardware this was tuned on: Ryzen 9 3900X (12 cores / 24 threads), 62 GB RAM, GTX 1650 4 GB,
-  WSL2.
+- Interpreter: conda `grid` (`/home/soluslan/miniconda3/envs/grid/bin/python`, Python 3.12) with
+  everything in `requirements.txt`. The system `python3` (3.14) has neither torch nor DMLab.
+- Machine: WSL2, Ubuntu 26.04 (GCC 15), 16 threads, 15 GB RAM, **no GPU**. Every entry point
+  falls back to CPU when CUDA is unavailable (A2C's `device="cuda"` default included). Memory is
+  the tight resource for RL: the A2C replay buffer alone is ~4.9 GB at 400k frames, plus one
+  DeepMind Lab process per environment.
+- DeepMind Lab: `bash scripts/setup_dmlab.sh` builds the `lab/` submodule and installs it into
+  `grid`. It needs these apt packages (installed with sudo, by hand): `build-essential libffi-dev
+  gettext freeglut3-dev libsdl2-dev zip libosmesa6-dev python3-dev python3-numpy python3-pil
+  libglib2.0-dev`. Several of these are in `universe`, so run `sudo apt-get update` first on a
+  fresh system. Bazelisk is fetched into `~/.local/bin` if missing. Both renderers work without
+  a GPU (`hardware` = EGL on Mesa's llvmpipe, `software` = OSMesa); the `libEGL warning: failed
+  to open /dev/dri/...` lines they print are harmless.
+- Timings recorded elsewhere in the docs (e.g. "~30 min on a GTX 1650", A2C frames/s in
+  `docs/plan/STATUS.md`) were measured on an earlier GPU machine; they are kept as records.

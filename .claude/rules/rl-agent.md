@@ -24,5 +24,11 @@ paths:
   the actor–critic (ED Fig. 5). Vision and grid are trained only by their own supervised losses.
 - Units: one environment step is one frame (1/60 s); one action = 4 frames; budgets and
   `step_counter` are in frames.
+- DeepMind Lab APIs (paths inside the `lab/` submodule; read only what the task needs):
+  - Lua level API: `docs/developers/reference/lua_api.md`; level scripts:
+    `docs/developers/creating_levels.md`, `docs/developers/minimal_level_tutorial.md`, and the
+    stock factories in `game_scripts/factories/`.
+  - Python API, observations, actions: `docs/users/python_api.md`, `docs/users/observations.md`,
+    `docs/users/actions.md`.
 - `grid_cells/rl_a3c.py` is the frozen legacy loop kept as the A3C baseline. Do not fix bugs in
   it; tests mark its known defects as `xfail(strict=True)`.

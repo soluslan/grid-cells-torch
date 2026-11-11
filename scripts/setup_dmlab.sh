@@ -3,7 +3,7 @@
 #
 # Usage: bash scripts/setup_dmlab.sh [--python PATH] [--lab-dir DIR] [--skip-deps] [--skip-build]
 #
-#   --python PATH   interpreter to install into (default: env1's python via conda)
+#   --python PATH   interpreter to install into (default: the conda env grid's python)
 #   --lab-dir DIR   DeepMind Lab checkout to patch and build (default: lab/ submodule)
 #   --skip-deps     do not check apt packages / bazelisk
 #   --skip-build    do not run bazel or pip; only patch and smoke-test the installed module
@@ -35,8 +35,8 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ -z "$PY" ]]; then
-  PY="$(conda run -n env1 python -c 'import sys; print(sys.executable)' 2>/dev/null || true)"
-  [[ -n "$PY" ]] || { echo "could not find env1; pass --python PATH" >&2; exit 1; }
+  PY="$(conda run -n grid python -c 'import sys; print(sys.executable)' 2>/dev/null || true)"
+  [[ -n "$PY" ]] || { echo "could not find the conda env grid; pass --python PATH" >&2; exit 1; }
 fi
 echo "target interpreter: $PY"
 

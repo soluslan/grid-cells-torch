@@ -20,7 +20,7 @@ below to read only what the task needs.
 | Task | Read |
 |---|---|
 | RL agent code (`rl_*`, `actor_critic`, `vision`, `replay_buffer`, `vec_env`) | `docs/paper/spec-rl-agent.md`, `docs/paper/deviations.md` (RL sections), ED Fig. 5 entry in `docs/paper/figures.md` |
-| DMLab level (`levels/*.lua`) | `spec-rl-agent.md` "Environment", Fig. 2 entry in `figures.md` **and open `docs/paper/figures/fig2.png`**; for DMLab APIs, the `lab/` reading list in `../CLAUDE.md` |
+| DMLab level (`levels/*.lua`) | `spec-rl-agent.md` "Environment", Fig. 2 entry in `figures.md` **and open `docs/paper/figures/fig2.png`**; for DMLab APIs, the `lab/` reading list in `.claude/rules/rl-agent.md` |
 | Supervised network, dataset, training | `docs/paper/spec-supervised.md`, `deviations.md` (supervised sections) |
 | Analysis / scoring (`scores`, `evaluate`, `figures`) | `spec-supervised.md` "Analysis definitions", Fig. 1 / ED 3 entries in `figures.md` |
 | Port fidelity vs the original TF code | the matching file in `../grid-cells/` (reference only, never modify) |
@@ -35,8 +35,8 @@ matters. Spec notes are summaries and can be wrong; the PDF and figures are grou
 paper is silent or ambiguous, say so and record the choice in `docs/paper/deviations.md`.
 Bugs are not deviations; record them in `COMMIT_DRAFT.md` (see below).
 
-If `docs/paper/text/` or the PDFs are missing (they are gitignored), regenerate them as described
-in `docs/paper/README.md`; the originals are in `../supplements/논문/` and `../supplements/figures/`.
+The PDFs, `docs/paper/figures/` and `docs/paper/text/` are local, gitignored copies. If any are
+missing, `docs/paper/README.md` says where to get them and how they are named.
 
 ## Working rules
 
@@ -47,5 +47,8 @@ in `docs/paper/README.md`; the originals are in `../supplements/논문/` and `..
   `docs/maintenance.md`, "Commits".
 - Never start a long training run without written milestone gates (see the plan).
 - `data/` is large and gitignored; never delete anything under `data/checkpoints/` without asking.
-- Python environment: conda `env1` (`/home/junoLee/miniconda3/envs/env1/bin/python`), which has
-  `torch` (CUDA), `deepmind_lab`, and `pytest`. The system `python3` has neither torch nor DMLab.
+- Python environment: conda `grid` (`/home/soluslan/miniconda3/envs/grid/bin/python`), which has
+  `torch`, `pytest`, and (once `scripts/setup_dmlab.sh` has run) `deepmind_lab`. The system
+  `python3` has neither torch nor DMLab.
+- There is no GPU: training, evaluation and tests run on CPU (the code falls back automatically).
+  Machine details: `docs/maintenance.md`, "Local environment".
