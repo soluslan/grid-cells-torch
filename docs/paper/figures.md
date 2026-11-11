@@ -44,6 +44,18 @@ the intra-arena cue as a floating pickup because only the text had been read.
 **Fig. 3** (`fig3.png`) — goal-driven / goal-doors mazes. Green-and-yellow walled rooms, red
 goal object, black doors. Curves (e, f): grid cell agent at x ≈ 0.5 already ~270–280 (goal-driven) and ~230 (goal-doors); ~340 (goal-driven) and
 ~280 (goal-doors) at 2.5; human dashed lines at ~260 and ~240. Reopen when building these mazes.
+- (a) The outline stays inside the 11 × 11 square but is notched inwards in places. The white
+  rectangles inside are empty spaces enclosed by walls (unused `*` cells of the DMLab maze).
+  About five framed pictures, each a different image and colour, are the wall cues. The agent
+  icon sits in the corridor between the central room and the goal room (the "Agent" label is
+  above it, in the central room).
+- (b) Eight doors: one closed (red arrow) and seven open (five green arrows, two of them
+  double-headed). Doors slide sideways.
+- (c, d) HUD numbers at the bottom, a framed picture on the wall, distal buildings above the
+  walls; (d) a closed door is a black panel.
+- Our render (`levels/goal_driven.lua`, `goal_doors.lua`, 2026-11-11) matches these, except
+  that DMLab's debug top-down camera shows the empty spaces as sky blue, not white, and draws
+  walls in perspective. The goal is an orange-red stacked object.
 
 **Fig. 4** (`fig4.png`) — sunburst maze (5 corridors with doors) and double E-maze; trajectory
 bundles and corridor-usage histograms. Reopen when building the probe mazes.

@@ -1,0 +1,11 @@
+***********
+*PPP***   *
+*GGP*** P *
+*GGP***GPP*
+*H***** PG*
+*     IGPG*
+* *******H*
+* *GPP*PPG*
+* *PPP*PGP*
+* IGGGIGPG*
+***********

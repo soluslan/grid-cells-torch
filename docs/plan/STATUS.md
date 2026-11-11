@@ -98,6 +98,12 @@ Updated: 2026-11-11
   goals/episode) for the remaining 8e8 without recovering. Four earlier dips between 6e7 and
   1.2e8 did recover on their own; the fifth did not. Random policy on the same level: 5.40.
   Paper: 289.
+- 2026-11-11, outside the phase list: Fig. 3a/b mazes added as `levels/goal_driven.lua` and
+  `levels/goal_doors.lua`, thin wrappers around the DMLab factories the paper names (main
+  p.8). Checked over 20 seeds each (with `goalVisible` true and false): 11 × 11 layouts,
+  spawns inside the outer walls, layouts identical to the released dmlab30 levels for the
+  same seed. Renders for comparison with Fig. 3a–d, with a README on reading them, are in
+  `results/fig3_mazes_2026-11-11/`.
 
 ## Next
 
@@ -106,6 +112,9 @@ Updated: 2026-11-11
   claim about final performance and is the first thing to investigate. The run's logs and
   checkpoint are not on the current machine (Decisions, 2026-11-11), so this needs a new run.
 - Phase 9 (gridness shortfall) and Phase 10 (comparison with the paper) are untouched.
+- Training on goal_driven / goal_doors needs per-level agent geometry first:
+  `RLEnvConfig.env_size_m` and `wall_world_units` hold square-arena values (2.5 m,
+  100–1100 units), which set the place-cell range and the world-to-metre conversion.
 - Codebase study sessions by region are planned; see `docs/study/` once it exists.
 
 ## Open questions

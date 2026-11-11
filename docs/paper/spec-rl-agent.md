@@ -24,8 +24,23 @@ Source: main p.6 ("Custom environment: square arena"), supp p.4 (1a).
 - Six discrete actions with fine-grained control: rotate in small increments, accelerate
   forward/backward/sideways, rotate while moving (main p.6). The exact six are not listed.
 
-Other environments (goal-driven, goal-doors, 11 × 11 = 2.7 × 2.7 m, procedurally generated; probe
-mazes) are in main p.6–7 and supp p.13–14. Not yet implemented here.
+## Environment: goal-driven and goal-doors (Fig. 3)
+
+Source: main p.6 ("DeepMind laboratory environments: goal-driven and goal-doors"), main p.8
+(public levels), Fig. 3a–d (main p.4).
+
+- Mazes within an 11 × 11 grid = 2.7 × 2.7 m, procedurally generated at each episode start:
+  layout, wall texture, wall cues and goal location change per episode, fixed within it.
+  Distal cues as in the square arena.
+- Random start; the goal is "always represented by the same object (Fig. 3c)" (a visible red
+  goal); +10 on reaching it, then teleport to a new random location. Episode = 5,400 steps
+  (90 s).
+- goal-doors only: door states change randomly each time the goal is reached.
+- These are the public DMLab levels `explore_goal_locations` (goal-driven) and
+  `explore_obstructed_goals` (goal-doors) (main p.8). Implemented as thin wrappers:
+  `levels/goal_driven.lua`, `levels/goal_doors.lua` (choices: `deviations.md`, row J).
+- Larger 11 × 17 versions (Fig. 3g, h; main p.6) and the probe mazes (Fig. 4; main p.6–7,
+  supp p.13–14) are not implemented.
 
 ## Architecture (Extended Data Fig. 5)
 
